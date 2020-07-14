@@ -1,4 +1,4 @@
-module github.com/cloudspannerecosystem/wrench
+module github.com/roryq/wrench
 
 require (
 	cloud.google.com/go/spanner v1.5.1

@@ -24,8 +24,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cloudspannerecosystem/wrench/cmd"
-	"github.com/cloudspannerecosystem/wrench/pkg/spanner"
+	"github.com/roryq/wrench/cmd"
+	"github.com/roryq/wrench/pkg/spanner"
 )
 
 func main() {

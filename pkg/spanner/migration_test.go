@@ -23,7 +23,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cloudspannerecosystem/wrench/pkg/spanner"
+	"github.com/roryq/wrench/pkg/spanner"
 )
 
 func TestLoadMigrations(t *testing.T) {

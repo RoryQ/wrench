@@ -24,7 +24,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cloudspannerecosystem/wrench/cmd"
+	"github.com/roryq/wrench/cmd"
 )
 
 func TestCreateMigrationFile(t *testing.T) {

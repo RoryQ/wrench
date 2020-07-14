@@ -30,7 +30,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/cloudspannerecosystem/wrench/pkg/spanner"
+	"github.com/roryq/wrench/pkg/spanner"
 	"github.com/spf13/cobra"
 )
 

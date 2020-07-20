@@ -34,6 +34,7 @@ const (
 	flagNameDirectory     = "directory"
 	flagCredentialsFile   = "credentials_file"
 	flagNameSchemaFile    = "schema_file"
+	flagLockIdentifier 	  = "lock_identifier"
 	flagDDLFile           = "ddl"
 	flagDMLFile           = "dml"
 	flagPartitioned       = "partitioned"

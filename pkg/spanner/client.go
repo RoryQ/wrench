@@ -670,3 +670,110 @@ func (c *Client) createVersionTable(ctx context.Context, tableName string) error
 
 	return c.ApplyDDL(ctx, []string{stmt})
 }
+
+type MigrationLock struct {
+	Success        bool
+	Release        func()
+	LockIdentifier string `spanner:"LockIdentifier"`
+	Expiry         time.Time `spanner:"Expiry"`
+}
+
+func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error {
+	if !c.tableExists(ctx, tableName) {
+		sql := fmt.Sprintf("CREATE TABLE %s(ID INT64, LockIdentifier STRING(200), Expiry TIMESTAMP) PRIMARY KEY(ID)", tableName)
+		c.ApplyDDL(ctx, []string{sql})
+	}
+
+	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		row, err := trx.ReadRow(ctx, tableName, spanner.Key{spanner.NullInt64{}}, []string{"LockIdentifier", "Expiry"})
+		if err != nil {
+			// insert
+			if spanner.ErrCode(err) == codes.NotFound {
+				return trx.BufferWrite([]*spanner.Mutation{
+					spanner.Insert(tableName,
+						[]string{"ID"},
+						[]interface{}{spanner.NullInt64{}})})
+			}
+			return err
+		}
+
+		lock := MigrationLock{}
+		row.ToStruct(&lock)
+		fmt.Printf("clearing lock identifier [%s] expiry [%v]\n", lock.LockIdentifier, lock.Expiry)
+
+
+		// update
+		return trx.BufferWrite([]*spanner.Mutation{
+			spanner.Update(tableName,
+				[]string{"ID", "LockIdentifier", "Expiry"},
+				[]interface{}{spanner.NullInt64{}, spanner.NullString{}, spanner.NullTime{}})})
+	})
+
+	return err
+}
+
+func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier string) (lock MigrationLock, err error) {
+	// skip if lock table not setup
+	if ! c.tableExists(ctx, tableName){
+		return MigrationLock{
+			Success:        true,
+			Release: func() {return },
+			LockIdentifier: "",
+			Expiry:         time.Time{},
+		}, nil
+
+	}
+	_, err = c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		sql := fmt.Sprintf(`UPDATE %s SET LockIdentifier=@lockIdentifier, 
+		Expiry = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 30 MINUTE) 
+		WHERE ID IS NULL AND (LockIdentifier IS NULL OR CURRENT_TIMESTAMP() > Expiry)`, tableName)
+		lockStmt := spanner.NewStatement(sql)
+		lockStmt.Params["lockIdentifier"] = lockIdentifier
+		rc, err := trx.Update(ctx, lockStmt)
+		if err != nil {
+			return err
+		}
+
+		lock.Success = rc == 1
+
+		sql2 := fmt.Sprintf("Select LockIdentifier, Expiry FROM %s WHERE ID IS NULL", tableName)
+		err = trx.Query(ctx, spanner.NewStatement(sql2)).
+			Do(func(r *spanner.Row) error {
+				if err := r.ToStruct(&lock); err != nil {
+					return err
+				}
+				return nil
+			})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	//fmt.Printf("%v %s %v\n", lock.Success, lock.LockIdentifier, lock.Expiry)
+
+	lock.Release = func() {
+		c.releaseMigrationLock(ctx, tableName, lockIdentifier)
+	}
+
+	return
+}
+
+func (c *Client) releaseMigrationLock(ctx context.Context, tableName, lockIdentifier string) error {
+	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		sql := fmt.Sprintf("Update %s SET LockIdentifier=NULL, Expiry=NULL WHERE ID IS NULL AND LockIdentifier=@lockIdentifier", tableName)
+		stmt := spanner.NewStatement(sql)
+		stmt.Params["lockIdentifier"] = lockIdentifier
+		_, err := trx.Update(ctx, stmt)
+		if err != nil {
+			return err
+		}
+		//log.Printf("release migration lock %s %v\n", lockIdentifier, rc == 1)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}

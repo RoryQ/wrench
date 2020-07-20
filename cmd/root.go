@@ -22,6 +22,7 @@ package cmd
 import (
 	"github.com/google/uuid"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 )
@@ -33,13 +34,14 @@ var (
 )
 
 var (
-	project         string
-	instance        string
-	database        string
-	directory       string
-	schemaFile      string
-	credentialsFile string
-	lockIdentifier string
+	project          string
+	instance         string
+	database         string
+	directory        string
+	schemaFile       string
+	credentialsFile  string
+	lockIdentifier   string
+	sequenceInterval uint16
 )
 
 var rootCmd = &cobra.Command{
@@ -71,6 +73,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&schemaFile, flagNameSchemaFile, "", "Name of schema file (optional. if not set, will use default 'schema.sql' file name)")
 	rootCmd.PersistentFlags().StringVar(&credentialsFile, flagCredentialsFile, "", "Specify Credentials File")
 	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, uuid.New().String(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
+	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
 
 	rootCmd.Version = Version
 	rootCmd.SetVersionTemplate(versionTemplate)
@@ -90,4 +93,12 @@ func spannerInstanceID() string {
 
 func spannerDatabaseID() string {
 	return os.Getenv("SPANNER_DATABASE_ID")
+}
+
+func getSequenceInterval() uint16 {
+	i, err := strconv.Atoi(os.Getenv("WRENCH_SEQUENCE_INTERVAL"))
+	if err != nil {
+		return 1
+	}
+	return uint16(i)
 }

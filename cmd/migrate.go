@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -327,6 +328,10 @@ func migrateLocker(c *cobra.Command, args []string) error {
 	return nil
 }
 
+func roundNext(n, next uint) uint {
+	return uint(math.Round(float64(n)/float64(next))) * next + next
+}
+
 func createMigrationFile(dir string, name string, digits int) (string, error) {
 	if name != "" && !spanner.MigrationNameRegex.MatchString(name) {
 		return "", errors.New("Invalid migration file name.")
@@ -339,7 +344,7 @@ func createMigrationFile(dir string, name string, digits int) (string, error) {
 
 	var v uint = 1
 	if len(ms) > 0 {
-		v = ms[len(ms)-1].Version + 1
+		v = roundNext(ms[len(ms)-1].Version, uint(sequenceInterval))
 	}
 	vStr := fmt.Sprint(v)
 

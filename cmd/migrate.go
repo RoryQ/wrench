@@ -29,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/roryq/wrench/pkg/spanner"
 	"github.com/spf13/cobra"
@@ -37,6 +38,7 @@ import (
 const (
 	migrationsDirName  = "migrations"
 	migrationTableName = "SchemaMigrations"
+	migrationLockTable = migrationTableName+"Lock"
 )
 
 // migrateCmd represents the migrate command
@@ -71,6 +73,12 @@ func init() {
 		Short: "Print migration version history",
 		RunE: migrateHistory,
 	}
+	migrateLockerCmd := &cobra.Command{
+		Use: "setup-lock",
+		Short: "Initialise or reset the migration lock",
+		Long: "Call once to enable the migration lock. Call again to reset the lock if a failure caused it not to release",
+		RunE: migrateLocker,
+	}
 
 	migrateCmd.AddCommand(
 		migrateCreateCmd,
@@ -78,6 +86,7 @@ func init() {
 		migrateVersionCmd,
 		migrateSetCmd,
 		migrateHistoryCmd,
+		migrateLockerCmd,
 	)
 
 	migrateCmd.PersistentFlags().String(flagNameDirectory, "", "Directory that migration files placed (required)")
@@ -134,6 +143,15 @@ func migrateUp(c *cobra.Command, args []string) error {
 		return err
 	}
 	defer client.Close()
+
+	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
+	defer lock.Release()
+	if !lock.Success {
+		return &Error {
+			cmd: c,
+			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
+		}
+	}
 
 	dir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
 	migrations, err := spanner.LoadMigrations(dir)
@@ -214,6 +232,16 @@ func migrateHistory(c *cobra.Command, args []string) error {
 	}
 	defer client.Close()
 
+	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
+	defer lock.Release()
+	time.Sleep(time.Second * 10)
+	if !lock.Success {
+		return &Error {
+			cmd: c,
+			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
+		}
+	}
+
 	history, err := client.GetMigrationHistory(ctx, migrationTableName)
 	if err != nil {
 		return err
@@ -255,6 +283,14 @@ func migrateSet(c *cobra.Command, args []string) error {
 		return err
 	}
 	defer client.Close()
+	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
+	defer lock.Release()
+	if !lock.Success {
+		return &Error {
+			cmd: c,
+			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
+		}
+	}
 
 	if err = client.EnsureMigrationTable(ctx, migrationTableName); err != nil {
 		return &Error{
@@ -270,6 +306,24 @@ func migrateSet(c *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+func migrateLocker(c *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	client, err := newSpannerClient(ctx, c)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	if err := client.SetupMigrationLock(ctx, migrationLockTable); err != nil{
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
 	return nil
 }
 

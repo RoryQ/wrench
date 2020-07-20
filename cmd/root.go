@@ -20,6 +20,7 @@
 package cmd
 
 import (
+	"github.com/google/uuid"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -38,6 +39,7 @@ var (
 	directory       string
 	schemaFile      string
 	credentialsFile string
+	lockIdentifier string
 )
 
 var rootCmd = &cobra.Command{
@@ -68,6 +70,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&directory, flagNameDirectory, "", "Directory that schema file placed (required)")
 	rootCmd.PersistentFlags().StringVar(&schemaFile, flagNameSchemaFile, "", "Name of schema file (optional. if not set, will use default 'schema.sql' file name)")
 	rootCmd.PersistentFlags().StringVar(&credentialsFile, flagCredentialsFile, "", "Specify Credentials File")
+	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, uuid.New().String(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
 
 	rootCmd.Version = Version
 	rootCmd.SetVersionTemplate(versionTemplate)

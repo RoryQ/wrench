@@ -23,6 +23,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/roryq/wrench/pkg/spanner"
+	"github.com/spf13/cobra"
 	"math"
 	"os"
 	"path/filepath"
@@ -30,10 +32,6 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
-	"time"
-
-	"github.com/roryq/wrench/pkg/spanner"
-	"github.com/spf13/cobra"
 )
 
 const (
@@ -147,6 +145,12 @@ func migrateUp(c *cobra.Command, args []string) error {
 
 	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
 	defer lock.Release()
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
 	if !lock.Success {
 		return &Error {
 			cmd: c,
@@ -235,7 +239,12 @@ func migrateHistory(c *cobra.Command, args []string) error {
 
 	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
 	defer lock.Release()
-	time.Sleep(time.Second * 10)
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
 	if !lock.Success {
 		return &Error {
 			cmd: c,
@@ -286,6 +295,12 @@ func migrateSet(c *cobra.Command, args []string) error {
 	defer client.Close()
 	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
 	defer lock.Release()
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
 	if !lock.Success {
 		return &Error {
 			cmd: c,

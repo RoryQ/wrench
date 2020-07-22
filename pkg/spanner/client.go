@@ -713,15 +713,14 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 }
 
 func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier string) (lock MigrationLock, err error) {
+	lock = MigrationLock{
+		Release: func() {return },
+	}
+
 	// skip if lock table not setup
 	if ! c.tableExists(ctx, tableName){
-		return MigrationLock{
-			Success:        true,
-			Release: func() {return },
-			LockIdentifier: "",
-			Expiry:         time.Time{},
-		}, nil
-
+		lock.Success = true
+		return lock, err
 	}
 	_, err = c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
 		sql := fmt.Sprintf(`UPDATE %s SET LockIdentifier=@lockIdentifier, 
@@ -750,6 +749,9 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 
 		return nil
 	})
+	if err != nil {
+		return lock, err
+	}
 
 	//fmt.Printf("%v %s %v\n", lock.Success, lock.LockIdentifier, lock.Expiry)
 
@@ -757,7 +759,7 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 		c.releaseMigrationLock(ctx, tableName, lockIdentifier)
 	}
 
-	return
+	return lock, err
 }
 
 func (c *Client) releaseMigrationLock(ctx context.Context, tableName, lockIdentifier string) error {

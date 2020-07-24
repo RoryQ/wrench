@@ -117,6 +117,15 @@ $ wrench migrate create --directory ./_examples
 
 This creates a next migration file like `_examples/migrations/000001.sql`. You will write your own migration DDL to this file.
 
+You can optionally set `$WRENCH_SEQUENCE_INTERVAL` or pass `--sequence_interval` with an integer e.g. `10` which will be used
+to generate the next sequence number by rounding up to the next sequence interval.
+
+```sh
+$ wrench migrate create --sequence_interval 10
+```
+This will create migration scripts like `000010.sql`, `000020.sql`, `000030.sql` etc. These gaps allow hotfixes to be
+inserted into the sequence if needed.
+
 ### Execute migrations
 
 ```sh
@@ -142,6 +151,20 @@ This applies single DDL or DML.
 
 Use `wrench [command] --help` for more information about a command.
 
+## Onboarding existing databases to wrench
+
+This fork of wrench uses two additional tables for tracking migrations, `SchemaMigrationsHistory` for all scripts
+applied and `SchemaMigrationsLock` to limit wrench migrations to a single invocation.
+If coming from a database managed by `golang-migrate` or the original wrench project then you will already have a
+`SchemaMigrations` table and no work is needed. You can proceed to use this version of wrench and during the next migration
+it will detect that the `SchemaMigrationsHistory` table is missing, then create and backfill the "history" data.
+Subsequent `migrate up` invocations will use the history table instead of the `SchemaMigrations` table to detect unapplied
+migrations.
+
+If you have an existing database that is not controlled by any migration tools then you should export the current schema
+(you can use `wrench load`) and use this as the baseline version by saving as `000001.sql` and manually creating a
+`SchemaMigrations` table with a `1` entry. This will initiate the backfill process, skipping the migration for existing
+databases but recreating for new databases.
 
 ## Contributions
 

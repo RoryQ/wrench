@@ -24,7 +24,9 @@ import (
 	"errors"
 	"fmt"
 	"google.golang.org/grpc/codes"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/spanner"
@@ -48,6 +50,7 @@ const (
 
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
+	ddlParse = regexp.MustCompile(`(?i)create +(?P<ObjectType>(table|index)) +(?P<ObjectName>\w+).+`)
 )
 
 type UpgradeStatus string
@@ -177,6 +180,62 @@ func (c *Client) TruncateAllTables(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+
+type SchemaDDL struct {
+	Statement string
+	Filename string
+	ObjectType string
+}
+
+func parseDDL(statement string) (ddl SchemaDDL, err error) {
+	r := ddlParse.FindStringSubmatch(statement)
+	var matches = make(map[string]string)
+	for i, n := range ddlParse.SubexpNames() {
+		if i != 0 && n != "" && i < len(r){
+			matches[n] = r[i]
+		}
+	}
+
+	ddl = SchemaDDL{
+		Statement:  statement,
+		ObjectType: strings.ToLower(matches["ObjectType"]),
+		Filename:   fmt.Sprintf("%s.sql", strings.ToLower(matches["ObjectName"])),
+	}
+
+	if ddl.ObjectType == "" {
+		return ddl, errors.New("could not determine the object type")
+	}
+
+	return ddl, nil
+}
+
+
+func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
+	req := &databasepb.GetDatabaseDdlRequest{Database: c.config.URL()}
+
+	res, err := c.spannerAdminClient.GetDatabaseDdl(ctx, req)
+	if err != nil {
+		return nil, &Error{
+			Code: ErrorCodeLoadSchema,
+			err:  err,
+		}
+	}
+
+	var ddls = make([]SchemaDDL, 0)
+	for i := range res.Statements {
+		ddl, err := parseDDL(res.Statements[i])
+		if err != nil {
+			return nil, &Error {
+				Code: ErrorCodeLoadSchema,
+				err: err,
+			}
+		}
+		ddls = append(ddls, ddl)
+	}
+
+	return ddls, nil
 }
 
 func (c *Client) LoadDDL(ctx context.Context) ([]byte, error) {

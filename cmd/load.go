@@ -21,7 +21,10 @@ package cmd
 
 import (
 	"context"
+	"github.com/roryq/wrench/pkg/spanner"
 	"io/ioutil"
+	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -30,6 +33,12 @@ var loadCmd = &cobra.Command{
 	Use:   "load",
 	Short: "Load schema from server to file",
 	RunE:  load,
+}
+
+var loadDiscreteCmd = &cobra.Command{
+	Use:   "load-discrete",
+	Short: "Load schema from server to discrete files per object",
+	RunE:  loadDiscrete,
 }
 
 func load(c *cobra.Command, args []string) error {
@@ -55,6 +64,70 @@ func load(c *cobra.Command, args []string) error {
 			err: err,
 			cmd: c,
 		}
+	}
+
+	return nil
+}
+
+func loadDiscrete(c *cobra.Command, args []string) error {
+	ctx := context.Background()
+
+	client, err := newSpannerClient(ctx, c)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	ddls, err := client.LoadDDLs(ctx)
+	if err != nil {
+		return &Error{
+			err: err,
+			cmd: c,
+		}
+	}
+
+	if err := clearSchemaDir(c); err != nil {
+		return &Error {
+			err: err,
+			cmd: c,
+		}
+	}
+	for _, ddl := range ddls {
+		if err := writeDDL(ddl, schemaDirPath(c)); err != nil {
+			return &Error{
+				err: err,
+				cmd: c,
+			}
+		}
+	}
+
+	return nil
+}
+
+func writeDDL(ddl spanner.SchemaDDL, schemaDir string) error {
+	parent := filepath.Join(schemaDir, ddl.ObjectType)
+	file := filepath.Join(parent, ddl.Filename)
+	_, err := os.Stat(parent)
+	if os.IsNotExist(err) {
+		os.MkdirAll(parent, 0700)
+	} else if err != nil {
+		return err
+	}
+	return ioutil.WriteFile(file, []byte(ddl.Statement), 0664)
+}
+
+func schemaDirPath(c *cobra.Command) string {
+	return c.Flag(flagNameDirectory).Value.String()
+}
+
+func clearSchemaDir(c *cobra.Command) error {
+	tables := filepath.Join(schemaDirPath(c), "table")
+	indexes := filepath.Join(schemaDirPath(c), "index")
+
+	if err := os.RemoveAll(tables); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(indexes); err != nil {
+		return err
 	}
 
 	return nil

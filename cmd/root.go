@@ -62,6 +62,7 @@ func init() {
 	rootCmd.AddCommand(dropCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(loadCmd)
+	rootCmd.AddCommand(loadDiscreteCmd)
 	rootCmd.AddCommand(applyCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(truncateCmd)

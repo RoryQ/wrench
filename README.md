@@ -1,4 +1,35 @@
 # wrench
+
+This is a fork of https://github.com/cloudspannerecosystem/wrench with the following improvements
+
+- Records timestamped history of applied migrations, not just the current version number.
+- Supports out of order migrations. Similar to [FlywayDB](https://flywaydb.org/documentation/commandline/migrate#outOfOrder), addresses [golang-migrate/migrate/#278](https://github.com/golang-migrate/migrate/issues/278)
+- Migration locking. Prevents multiple wrench processes from applying the same migration.
+- Automated release builds. Each release has prebuilt binary for multiple os/arch that can be downloaded to your CI environment without requiring golang to build from source.
+- Supports INSERT statements in migration DML scripts. (Not just partitioned DML)
+- Custom intervals for migration sequences. Generated migration files can be numbered by 10s, 100s etc. E.g. `[00010.sql, 00020.sql, 00030.sql]` This is allows hotfixes to be inserted inbetween applied migrations.
+- Export schema to discrete files. Instead of a `schema.sql` containing all the objects. If this is checked into source control this makes diff-ing more consistent as it follows a hierarchy vs moving around in a single file. e.g. `[table/table1.sql, table/table2.sql, index/index1.sql]`
+- Automatically upgrades tracking tables used by [cloudspannerecosystem/wrench](https://github.com/cloudspannerecosystem/wrench) or [golang-migrate/migrate](https://github.com/golang-migrate/migrate) to this version.
+
+## Onboarding existing databases to wrench
+
+This fork of wrench uses two additional tables for tracking migrations, `SchemaMigrationsHistory` for all scripts
+applied and `SchemaMigrationsLock` to limit wrench migrations to a single invocation.
+If coming from a database managed by `golang-migrate` or the `cloudspannerecosystem/wrench` then you will already have a
+`SchemaMigrations` table and no work is needed. You can proceed to use this version of wrench and during the next migration
+it will detect that the `SchemaMigrationsHistory` table is missing, then create and backfill the "history" data.
+Subsequent `migrate up` invocations will use the history table instead of the `SchemaMigrations` table to detect unapplied
+migrations.
+
+If you have an existing database that is not controlled by any migration tools then you should export the current schema
+(you can use `wrench load`) and use this as the baseline version by saving as `000001.sql` and manually creating a
+`SchemaMigrations` table with a `1` entry. This will initiate the backfill process, skipping the migration for existing
+databases but recreating for new databases.
+
+### If you wish to go back to `golang-migrate` or `cloudspannerecosystem/wrench`
+You can simply drop the `SchemaMigrationsHistory` and `SchemaMigrationsLock` table as the `SchemaMigrations` will be in sync.
+___
+
 [![cloudspannerecosystem](https://circleci.com/gh/cloudspannerecosystem/wrench.svg?style=svg)](https://circleci.com/gh/cloudspannerecosystem/wrench)
 
 `wrench` is a schema management tool for [Cloud Spanner](https://cloud.google.com/spanner/).
@@ -150,21 +181,6 @@ $ wrench apply --ddl ./_examples/ddl.sql
 This applies single DDL or DML.
 
 Use `wrench [command] --help` for more information about a command.
-
-## Onboarding existing databases to wrench
-
-This fork of wrench uses two additional tables for tracking migrations, `SchemaMigrationsHistory` for all scripts
-applied and `SchemaMigrationsLock` to limit wrench migrations to a single invocation.
-If coming from a database managed by `golang-migrate` or the original wrench project then you will already have a
-`SchemaMigrations` table and no work is needed. You can proceed to use this version of wrench and during the next migration
-it will detect that the `SchemaMigrationsHistory` table is missing, then create and backfill the "history" data.
-Subsequent `migrate up` invocations will use the history table instead of the `SchemaMigrations` table to detect unapplied
-migrations.
-
-If you have an existing database that is not controlled by any migration tools then you should export the current schema
-(you can use `wrench load`) and use this as the baseline version by saving as `000001.sql` and manually creating a
-`SchemaMigrations` table with a `1` entry. This will initiate the backfill process, skipping the migration for existing
-databases but recreating for new databases.
 
 ## Contributions
 

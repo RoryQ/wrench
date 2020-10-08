@@ -264,6 +264,12 @@ func (c *Client) LoadDDL(ctx context.Context) ([]byte, error) {
 	return schema, nil
 }
 
+type StaticData struct {
+	TableName string
+	Contents []byte
+	Rows int
+}
+
 func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte) error {
 	return c.ApplyDDL(ctx, toStatements(ddl))
 }

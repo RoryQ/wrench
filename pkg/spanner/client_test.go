@@ -20,14 +20,16 @@
 package spanner
 
 import (
-	"cloud.google.com/go/spanner"
 	"context"
 	"fmt"
-	"github.com/google/uuid"
-	"google.golang.org/api/iterator"
 	"io/ioutil"
 	"os"
 	"testing"
+	"time"
+
+	"cloud.google.com/go/spanner"
+	"github.com/google/uuid"
+	"google.golang.org/api/iterator"
 )
 
 const (
@@ -261,7 +263,7 @@ func ensureMigrationColumn(t *testing.T, ctx context.Context, client *Client, co
 func ensureMigrationHistoryRecord(t *testing.T, ctx context.Context, client *Client, version int64, dirty bool) {
 	history, err := client.GetMigrationHistory(ctx, migrationTable)
 	for i := range history {
-		if history[i].Version == version && history[i].Dirty == dirty{
+		if history[i].Version == version && history[i].Dirty == dirty {
 			return
 		}
 	}
@@ -624,6 +626,9 @@ func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func())
 	if err := client.CreateDatabase(ctx, ddl); err != nil {
 		t.Fatalf("failed to create database: %v", err)
 	}
+
+	// emulator weirdness in CI
+	time.Sleep(100 * time.Millisecond)
 
 	return client, func() {
 		defer client.Close()

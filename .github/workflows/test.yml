@@ -15,7 +15,7 @@ jobs:
         env:
           SPANNER_INSTANCE_ID: ${{env.SPANNER_INSTANCE_ID}}
           SPANNER_PROJECT_ID: ${{env.SPANNER_PROJECT_ID}}
-        image: roryq/spanner-emulator:0.8.2
+        image: roryq/spanner-emulator:1.1.0
     env:
       SPANNER_INSTANCE_ID: inst
       SPANNER_PROJECT_ID: proj

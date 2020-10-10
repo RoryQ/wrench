@@ -20,13 +20,23 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
-	"github.com/roryq/wrench/pkg/spanner"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
+
+	"github.com/roryq/wrench/pkg/spanner"
 
 	"github.com/spf13/cobra"
+)
+
+const (
+	dirTable      = "table"
+	dirStaticData = "static_data"
+	dirIndex      = "index"
 )
 
 var loadCmd = &cobra.Command{
@@ -77,6 +87,8 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 		return err
 	}
 	defer client.Close()
+
+	// load and write ddls
 	ddls, err := client.LoadDDLs(ctx)
 	if err != nil {
 		return &Error{
@@ -86,7 +98,7 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 	}
 
 	if err := clearSchemaDir(c); err != nil {
-		return &Error {
+		return &Error{
 			err: err,
 			cmd: c,
 		}
@@ -100,19 +112,79 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 		}
 	}
 
+	// load and write static data
+	tables, err := readStaticDataTablesFile(c)
+	if err != nil {
+		return &Error{
+			err: err,
+			cmd: c,
+		}
+	}
+	datas, err := client.LoadStaticDatas(ctx, tables)
+	if err != nil {
+		return &Error{
+			err: err,
+			cmd: c,
+		}
+	}
+	for _, d := range datas {
+		if err := writeData(d, schemaDirPath(c)); err != nil {
+			return &Error{
+				err: err,
+				cmd: c,
+			}
+		}
+	}
+
 	return nil
+}
+
+func readStaticDataTablesFile(c *cobra.Command) ([]string, error) {
+	p := path.Clean(staticDataTablesFilePath(c))
+	f, err := os.Open(p)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var tables []string
+	for scanner.Scan() {
+		tables = append(tables, scanner.Text())
+	}
+
+	return tables, nil
 }
 
 func writeDDL(ddl spanner.SchemaDDL, schemaDir string) error {
 	parent := filepath.Join(schemaDir, ddl.ObjectType)
 	file := filepath.Join(parent, ddl.Filename)
+	if err := mkdir(parent); err != nil {
+		return err
+	}
+	return ioutil.WriteFile(file, []byte(ddl.Statement), 0664)
+}
+
+func mkdir(parent string) error {
 	_, err := os.Stat(parent)
 	if os.IsNotExist(err) {
 		os.MkdirAll(parent, 0700)
 	} else if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(file, []byte(ddl.Statement), 0664)
+	return nil
+}
+
+func writeData(data spanner.StaticData, schemaDir string) error {
+	parent := filepath.Join(schemaDir, dirStaticData)
+	file := filepath.Join(parent, data.ToFileName())
+	if err := mkdir(parent); err != nil {
+		return err
+	}
+	return ioutil.WriteFile(file, []byte(strings.Join(data.Statements, "\n")), 0644)
 }
 
 func schemaDirPath(c *cobra.Command) string {
@@ -120,13 +192,17 @@ func schemaDirPath(c *cobra.Command) string {
 }
 
 func clearSchemaDir(c *cobra.Command) error {
-	tables := filepath.Join(schemaDirPath(c), "table")
-	indexes := filepath.Join(schemaDirPath(c), "index")
+	tables := filepath.Join(schemaDirPath(c), dirTable)
+	indexes := filepath.Join(schemaDirPath(c), dirIndex)
+	staticData := filepath.Join(schemaDirPath(c), dirStaticData)
 
 	if err := os.RemoveAll(tables); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(indexes); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(staticData); err != nil {
 		return err
 	}
 

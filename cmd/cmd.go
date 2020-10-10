@@ -28,18 +28,20 @@ import (
 )
 
 const (
-	flagNameProject       = "project"
-	flagNameInstance      = "instance"
-	flagNameDatabase      = "database"
-	flagNameDirectory     = "directory"
-	flagCredentialsFile   = "credentials_file"
-	flagNameSchemaFile    = "schema_file"
-	flagLockIdentifier    = "lock_identifier"
-	flagSequenceInterval  = "sequence_interval"
-	flagDDLFile           = "ddl"
-	flagDMLFile           = "dml"
-	flagPartitioned       = "partitioned"
-	defaultSchemaFileName = "schema.sql"
+	flagNameProject             = "project"
+	flagNameInstance            = "instance"
+	flagNameDatabase            = "database"
+	flagNameDirectory           = "directory"
+	flagCredentialsFile         = "credentials_file"
+	flagStaticDataTablesFile    = "static_data_tables_file"
+	flagNameSchemaFile          = "schema_file"
+	flagLockIdentifier          = "lock_identifier"
+	flagSequenceInterval        = "sequence_interval"
+	flagDDLFile                 = "ddl"
+	flagDMLFile                 = "dml"
+	flagPartitioned             = "partitioned"
+	defaultSchemaFileName       = "schema.sql"
+	defaultStaticDataTablesFile = "static_data_tables.txt"
 )
 
 func newSpannerClient(ctx context.Context, c *cobra.Command) (*spanner.Client, error) {
@@ -65,6 +67,14 @@ func schemaFilePath(c *cobra.Command) string {
 	filename := c.Flag(flagNameSchemaFile).Value.String()
 	if filename == "" {
 		filename = defaultSchemaFileName
+	}
+	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
+}
+
+func staticDataTablesFilePath(c *cobra.Command) string {
+	filename := c.Flag(flagStaticDataTablesFile).Value.String()
+	if filename == "" {
+		filename = defaultStaticDataTablesFile
 	}
 	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
 }

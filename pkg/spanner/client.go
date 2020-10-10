@@ -23,11 +23,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"google.golang.org/grpc/codes"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/roryq/wrench/pkg/spanner/dataloader"
+	"google.golang.org/grpc/codes"
 
 	"cloud.google.com/go/spanner"
 	admin "cloud.google.com/go/spanner/admin/database/apiv1"
@@ -50,7 +52,7 @@ const (
 
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
-	ddlParse = regexp.MustCompile(`(?i)create +(?P<ObjectType>(table|index)) +(?P<ObjectName>\w+).+`)
+	ddlParse                  = regexp.MustCompile(`(?i)create +(?P<ObjectType>(table|index)) +(?P<ObjectName>\w+).+`)
 )
 
 type UpgradeStatus string
@@ -182,10 +184,9 @@ func (c *Client) TruncateAllTables(ctx context.Context) error {
 	return nil
 }
 
-
 type SchemaDDL struct {
-	Statement string
-	Filename string
+	Statement  string
+	Filename   string
 	ObjectType string
 }
 
@@ -193,7 +194,7 @@ func parseDDL(statement string) (ddl SchemaDDL, err error) {
 	r := ddlParse.FindStringSubmatch(statement)
 	var matches = make(map[string]string)
 	for i, n := range ddlParse.SubexpNames() {
-		if i != 0 && n != "" && i < len(r){
+		if i != 0 && n != "" && i < len(r) {
 			matches[n] = r[i]
 		}
 	}
@@ -211,7 +212,6 @@ func parseDDL(statement string) (ddl SchemaDDL, err error) {
 	return ddl, nil
 }
 
-
 func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
 	req := &databasepb.GetDatabaseDdlRequest{Database: c.config.URL()}
 
@@ -227,9 +227,9 @@ func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
 	for i := range res.Statements {
 		ddl, err := parseDDL(res.Statements[i])
 		if err != nil {
-			return nil, &Error {
+			return nil, &Error{
 				Code: ErrorCodeLoadSchema,
-				err: err,
+				err:  err,
 			}
 		}
 		ddls = append(ddls, ddl)
@@ -262,6 +262,54 @@ func (c *Client) LoadDDL(ctx context.Context) ([]byte, error) {
 	}
 
 	return schema, nil
+}
+
+type StaticData struct {
+	TableName  string
+	Statements []string
+	Count      int
+}
+
+func (s StaticData) ToFileName() string {
+	return strings.ToLower(s.TableName) + ".sql"
+}
+
+func (c *Client) LoadStaticDatas(ctx context.Context, tables []string) ([]StaticData, error) {
+	datas := make([]StaticData, 0, len(tables))
+	for _, t := range tables {
+		d, err := c.loadStaticData(ctx, t)
+		if err != nil {
+			return nil, err
+		}
+		datas = append(datas, d)
+	}
+
+	return datas, nil
+}
+
+func (c *Client) loadStaticData(ctx context.Context, table string) (StaticData, error) {
+	data := StaticData{
+		TableName: table,
+	}
+	err := c.spannerClient.
+		Single().
+		Query(ctx, spanner.NewStatement("SELECT * FROM "+table)).
+		Do(func(r *spanner.Row) error {
+			insert, err := dataloader.RowToInsertStatement(table, r)
+			if err != nil {
+				return err
+			}
+			data.Statements = append(data.Statements, insert)
+			data.Count++
+			return nil
+		})
+	if err != nil {
+		return StaticData{}, err
+	}
+
+	sort.Strings(data.Statements)
+
+	return data, nil
 }
 
 func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte) error {

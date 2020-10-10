@@ -20,9 +20,10 @@
 package cmd
 
 import (
-	"github.com/google/uuid"
 	"os"
 	"strconv"
+
+	"github.com/google/uuid"
 
 	"github.com/spf13/cobra"
 )
@@ -34,14 +35,15 @@ var (
 )
 
 var (
-	project          string
-	instance         string
-	database         string
-	directory        string
-	schemaFile       string
-	credentialsFile  string
-	lockIdentifier   string
-	sequenceInterval uint16
+	project              string
+	instance             string
+	database             string
+	directory            string
+	schemaFile           string
+	credentialsFile      string
+	staticDataTablesFile string
+	lockIdentifier       string
+	sequenceInterval     uint16
 )
 
 var rootCmd = &cobra.Command{
@@ -73,6 +75,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&directory, flagNameDirectory, "", "Directory that schema file placed (required)")
 	rootCmd.PersistentFlags().StringVar(&schemaFile, flagNameSchemaFile, "", "Name of schema file (optional. if not set, will use default 'schema.sql' file name)")
 	rootCmd.PersistentFlags().StringVar(&credentialsFile, flagCredentialsFile, "", "Specify Credentials File")
+	rootCmd.PersistentFlags().StringVar(&staticDataTablesFile, flagStaticDataTablesFile, "", "File containing list of static data tables to track (optional)")
 	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, uuid.New().String(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
 

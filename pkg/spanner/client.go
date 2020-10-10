@@ -291,9 +291,14 @@ func (c *Client) loadStaticData(ctx context.Context, table string) (StaticData, 
 	data := StaticData{
 		TableName: table,
 	}
-	err := c.spannerClient.
+	query, err := c.staticDataQuery(ctx, table)
+	if err != nil {
+		return StaticData{}, err
+	}
+
+	err = c.spannerClient.
 		Single().
-		Query(ctx, spanner.NewStatement("SELECT * FROM "+table)).
+		Query(ctx, query).
 		Do(func(r *spanner.Row) error {
 			insert, err := dataloader.RowToInsertStatement(table, r)
 			if err != nil {
@@ -307,9 +312,39 @@ func (c *Client) loadStaticData(ctx context.Context, table string) (StaticData, 
 		return StaticData{}, err
 	}
 
-	sort.Strings(data.Statements)
-
 	return data, nil
+}
+
+func (c *Client) staticDataQuery(ctx context.Context, table string) (spanner.Statement, error) {
+	var columnOrders []string
+	stmt := spanner.NewStatement(
+		"SELECT COLUMN_NAME, COLUMN_ORDERING FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
+			"WHERE INDEX_NAME='PRIMARY_KEY' AND TABLE_NAME=@tableName " +
+			"ORDER BY ORDINAL_POSITION")
+	stmt.Params["tableName"] = table
+	err := c.spannerClient.
+		Single().
+		Query(ctx, stmt).
+		Do(func(r *spanner.Row) error {
+			var name, order string
+			if err := r.Columns(&name, &order); err != nil {
+				return err
+			}
+
+			columnOrders = append(columnOrders, fmt.Sprintf("%s %s", name, order))
+
+			return nil
+		})
+	if err != nil {
+		return spanner.Statement{}, err
+	}
+
+	var orderByClause string
+	if len(columnOrders) > 0 {
+		orderByClause = "\nORDER BY " + strings.Join(columnOrders, ", ")
+	}
+
+	return spanner.NewStatement("SELECT * FROM " + table + orderByClause), nil
 }
 
 func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte) error {

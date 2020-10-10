@@ -1,9 +1,9 @@
 module github.com/roryq/wrench
 
 require (
+	cloud.google.com/go v0.65.0
 	cloud.google.com/go/spanner v1.10.0
 	github.com/bazelbuild/bazelisk v0.0.8
-	github.com/cloudspannerecosystem/spanner-cli v0.8.2
 	github.com/google/uuid v1.1.1
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/spf13/cobra v0.0.3

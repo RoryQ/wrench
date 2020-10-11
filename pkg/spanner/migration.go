@@ -48,11 +48,13 @@ var (
 	// as it must be idempotent. This probably isn't solvable with more regexes.
 	notPartitionedDmlRegex = regexp.MustCompile("INSERT")
 
+	// matches a single comment on its own line
+	oneLineSingleComment = regexp.MustCompile(`(?m)^\s*--.*$`)
 )
 
 const (
-	statementKindDDL statementKind = "DDL"
-	statementKindDML statementKind = "DML"
+	statementKindDDL            statementKind = "DDL"
+	statementKindDML            statementKind = "DML"
 	statementKindPartitionedDML statementKind = "PartitionedDML"
 )
 
@@ -132,12 +134,24 @@ func LoadMigrations(dir string) (Migrations, error) {
 	return migrations, nil
 }
 
+func stripComments(statement string) string {
+	return oneLineSingleComment.ReplaceAllString(statement, "")
+}
+
+func stripStatement(statement string) string {
+	return strings.TrimSpace(
+		stripComments(
+			strings.TrimSpace(
+				statement)))
+
+}
+
 func toStatements(file []byte) []string {
 	contents := bytes.Split(file, []byte(statementsSeparator))
 
 	statements := make([]string, 0, len(contents))
 	for _, c := range contents {
-		if statement := strings.TrimSpace(string(c)); statement != "" {
+		if statement := stripStatement(string(c)); statement != "" {
 			statements = append(statements, statement)
 		}
 	}
@@ -147,8 +161,8 @@ func toStatements(file []byte) []string {
 
 func inspectStatementsKind(statements []string) (statementKind, error) {
 	kindMap := map[statementKind]uint64{
-		statementKindDDL: 0,
-		statementKindDML: 0,
+		statementKindDDL:            0,
+		statementKindDML:            0,
 		statementKindPartitionedDML: 0,
 	}
 
@@ -175,7 +189,7 @@ func distinctKind(kindMap map[statementKind]uint64, kind statementKind) bool {
 	target := kindMap[kind]
 
 	var total uint64
-	for k:= range kindMap {
+	for k := range kindMap {
 		total = total + kindMap[k]
 	}
 
@@ -183,11 +197,11 @@ func distinctKind(kindMap map[statementKind]uint64, kind statementKind) bool {
 }
 
 func getStatementKind(statement string) statementKind {
-	if isPartitionedDMLOnly(statement){
+	if isPartitionedDMLOnly(statement) {
 		return statementKindPartitionedDML
 	}
 
-	if isDMLAny(statement){
+	if isDMLAny(statement) {
 		return statementKindDML
 	}
 

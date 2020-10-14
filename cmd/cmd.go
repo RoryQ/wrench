@@ -33,7 +33,7 @@ const (
 	flagNameDatabase            = "database"
 	flagNameDirectory           = "directory"
 	flagCredentialsFile         = "credentials_file"
-	flagStaticDataTablesFile    = "static_data_tables_file"
+	flagStaticDataTables        = "static_data_tables"
 	flagNameSchemaFile          = "schema_file"
 	flagLockIdentifier          = "lock_identifier"
 	flagSequenceInterval        = "sequence_interval"
@@ -41,7 +41,6 @@ const (
 	flagDMLFile                 = "dml"
 	flagPartitioned             = "partitioned"
 	defaultSchemaFileName       = "schema.sql"
-	defaultStaticDataTablesFile = "static_data_tables.txt"
 )
 
 func newSpannerClient(ctx context.Context, c *cobra.Command) (*spanner.Client, error) {
@@ -71,10 +70,3 @@ func schemaFilePath(c *cobra.Command) string {
 	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
 }
 
-func staticDataTablesFilePath(c *cobra.Command) string {
-	filename := c.Flag(flagStaticDataTablesFile).Value.String()
-	if filename == "" {
-		filename = defaultStaticDataTablesFile
-	}
-	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
-}

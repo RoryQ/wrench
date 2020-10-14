@@ -20,11 +20,9 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -113,14 +111,7 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 	}
 
 	// load and write static data
-	tables, err := readStaticDataTablesFile(c)
-	if err != nil {
-		return &Error{
-			err: err,
-			cmd: c,
-		}
-	}
-	datas, err := client.LoadStaticDatas(ctx, tables)
+	datas, err := client.LoadStaticDatas(ctx, readStaticDataTables(c))
 	if err != nil {
 		return &Error{
 			err: err,
@@ -139,24 +130,9 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func readStaticDataTablesFile(c *cobra.Command) ([]string, error) {
-	p := path.Clean(staticDataTablesFilePath(c))
-	f, err := os.Open(p)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	var tables []string
-	for scanner.Scan() {
-		tables = append(tables, scanner.Text())
-	}
-
-	return tables, nil
+func readStaticDataTables(c *cobra.Command)[]string {
+	tables := c.Flag(flagStaticDataTables).Value.String()
+	return strings.Split(tables, ",")
 }
 
 func writeDDL(ddl spanner.SchemaDDL, schemaDir string) error {
@@ -171,7 +147,7 @@ func writeDDL(ddl spanner.SchemaDDL, schemaDir string) error {
 func mkdir(parent string) error {
 	_, err := os.Stat(parent)
 	if os.IsNotExist(err) {
-		os.MkdirAll(parent, 0700)
+		_ = os.MkdirAll(parent, 0700)
 	} else if err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ This is a fork of https://github.com/cloudspannerecosystem/wrench with the follo
 - Supports INSERT statements in migration DML scripts. (Not just partitioned DML)
 - Custom intervals for migration sequences. Generated migration files can be numbered by 10s, 100s etc. E.g. `[00010.sql, 00020.sql, 00030.sql]` This is allows hotfixes to be inserted inbetween applied migrations.
 - Export schema to discrete files. Instead of a `schema.sql` containing all the objects. If this is checked into source control this makes diff-ing more consistent as it follows a hierarchy vs moving around in a single file. e.g. `[table/table1.sql, table/table2.sql, index/index1.sql]`
+- Export static data tables by specifying in a `static_data_tables.txt` or `wrench.json` file.
 - Automatically upgrades tracking tables used by [cloudspannerecosystem/wrench](https://github.com/cloudspannerecosystem/wrench) or [golang-migrate/migrate](https://github.com/golang-migrate/migrate) to this version.
 
 ## Onboarding existing databases to wrench

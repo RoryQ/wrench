@@ -1,0 +1,9 @@
+{
+  "StaticDataTables": [
+    "JsonTable1",
+    "JsonTable2"
+  ],
+  "Ignore other properties": {
+    "other fields": 12345
+  }
+}

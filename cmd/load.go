@@ -22,6 +22,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io/ioutil"
 	"os"
 	"path"
@@ -38,6 +39,10 @@ const (
 	dirStaticData = "static_data"
 	dirIndex      = "index"
 )
+
+type staticDataJson struct {
+	StaticDataTables []string
+}
 
 var loadCmd = &cobra.Command{
 	Use:   "load",
@@ -113,7 +118,7 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 	}
 
 	// load and write static data
-	tables, err := readStaticDataTablesFile(c)
+	tables, err := readStaticDataTablesFile(staticDataTablesFilePath(c))
 	if err != nil {
 		return &Error{
 			err: err,
@@ -139,23 +144,60 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func readStaticDataTablesFile(c *cobra.Command) ([]string, error) {
-	p := path.Clean(staticDataTablesFilePath(c))
+func readStaticDataTablesFile(filePath string) (tables []string, err error) {
+	filePath = path.Clean(filePath)
+	if strings.HasSuffix(filePath, defaultStaticDataTablesFile) {
+		// try both structured config or text file
+		jsonPath := strings.ReplaceAll(filePath, defaultStaticDataTablesFile, "wrench.json")
+		tables, err = readJsonFile(jsonPath)
+		if err == nil {
+			return tables, nil
+		}
+		txtPath := strings.ReplaceAll(filePath, defaultStaticDataTablesFile, "static_data_tables.txt")
+		tables, err = readTxtFile(txtPath)
+	} else if strings.HasSuffix(filePath, ".json") {
+		tables, err = readJsonFile(filePath)
+	} else if strings.HasSuffix(filePath, ".txt") {
+		tables, err = readTxtFile(filePath)
+	}
+
+	return tables, err
+}
+
+func openFile(p string) (*os.File, error, func()) {
 	f, err := os.Open(p)
 	if os.IsNotExist(err) {
-		return nil, nil
+		return nil, nil, func(){}
 	}
 	if err != nil {
-		return nil, err
+		return nil, err, func(){}
 	}
-	defer f.Close()
+	return f, err, func(){f.Close()}
+}
 
+func readJsonFile(filePath string) ([]string , error){
+	f, err, done := openFile(filePath)
+	defer done()
+	bytes, err := ioutil.ReadAll(f)
+	var d staticDataJson
+	err = json.Unmarshal(bytes, &d)
+	if err != nil {
+		return []string{}, err
+	}
+	return d.StaticDataTables, nil
+}
+
+func readTxtFile(filePath string) ([]string, error) {
+	f, err, done := openFile(filePath)
+	if err != nil {
+		return []string{}, err
+	}
+	defer done()
 	scanner := bufio.NewScanner(f)
-	var tables []string
+	tables := []string{}
 	for scanner.Scan() {
 		tables = append(tables, scanner.Text())
 	}
-
 	return tables, nil
 }
 

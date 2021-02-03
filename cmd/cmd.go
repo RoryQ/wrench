@@ -41,7 +41,7 @@ const (
 	flagDMLFile                 = "dml"
 	flagPartitioned             = "partitioned"
 	defaultSchemaFileName       = "schema.sql"
-	defaultStaticDataTablesFile = "static_data_tables.txt"
+	defaultStaticDataTablesFile = "{wrench.json|static_data_tables.txt}"
 )
 
 func newSpannerClient(ctx context.Context, c *cobra.Command) (*spanner.Client, error) {

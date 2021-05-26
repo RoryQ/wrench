@@ -20,11 +20,10 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"github.com/roryq/wrench/pkg/spanner"
-	"github.com/spf13/cobra"
 	"math"
 	"os"
 	"path/filepath"
@@ -32,12 +31,16 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/kennygrant/sanitize"
+	"github.com/roryq/wrench/pkg/spanner"
+	"github.com/spf13/cobra"
 )
 
 const (
 	migrationsDirName  = "migrations"
 	migrationTableName = "SchemaMigrations"
-	migrationLockTable = migrationTableName+"Lock"
+	migrationLockTable = migrationTableName + "Lock"
 )
 
 // migrateCmd represents the migrate command
@@ -68,15 +71,15 @@ func init() {
 		RunE:  migrateSet,
 	}
 	migrateHistoryCmd := &cobra.Command{
-		Use: "history",
+		Use:   "history",
 		Short: "Print migration version history",
-		RunE: migrateHistory,
+		RunE:  migrateHistory,
 	}
 	migrateLockerCmd := &cobra.Command{
-		Use: "setup-lock",
+		Use:   "setup-lock",
 		Short: "Initialise or reset the migration lock",
-		Long: "Call once to enable the migration lock. Call again to reset the lock if a failure caused it not to release",
-		RunE: migrateLocker,
+		Long:  "Call once to enable the migration lock. Call again to reset the lock if a failure caused it not to release",
+		RunE:  migrateLocker,
 	}
 
 	migrateCmd.AddCommand(
@@ -88,15 +91,12 @@ func init() {
 		migrateLockerCmd,
 	)
 
+	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
 	migrateCmd.PersistentFlags().String(flagNameDirectory, "", "Directory that migration files placed (required)")
 }
 
 func migrateCreate(c *cobra.Command, args []string) error {
-	name := ""
-
-	if len(args) > 0 {
-		name = args[0]
-	}
+	name := getNameForMigration(c, args)
 
 	dir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
 
@@ -120,6 +120,19 @@ func migrateCreate(c *cobra.Command, args []string) error {
 	fmt.Printf("%s is created\n", filename)
 
 	return nil
+}
+
+func getNameForMigration(c *cobra.Command, args []string) string {
+	name := ""
+
+	noPrompt := c.Flag(flagNameCreateNoPrompt).Value.String() == "true"
+	// use argument as name if provided
+	if len(args) > 0 {
+		name = args[0]
+	} else if !noPrompt {
+		name = promptDescription()
+	}
+	return name
 }
 
 func migrateUp(c *cobra.Command, args []string) error {
@@ -152,7 +165,7 @@ func migrateUp(c *cobra.Command, args []string) error {
 		}
 	}
 	if !lock.Success {
-		return &Error {
+		return &Error{
 			cmd: c,
 			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
 		}
@@ -246,7 +259,7 @@ func migrateHistory(c *cobra.Command, args []string) error {
 		}
 	}
 	if !lock.Success {
-		return &Error {
+		return &Error{
 			cmd: c,
 			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
 		}
@@ -302,7 +315,7 @@ func migrateSet(c *cobra.Command, args []string) error {
 		}
 	}
 	if !lock.Success {
-		return &Error {
+		return &Error{
 			cmd: c,
 			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
 		}
@@ -334,7 +347,7 @@ func migrateLocker(c *cobra.Command, args []string) error {
 	}
 	defer client.Close()
 
-	if err := client.SetupMigrationLock(ctx, migrationLockTable); err != nil{
+	if err := client.SetupMigrationLock(ctx, migrationLockTable); err != nil {
 		return &Error{
 			cmd: c,
 			err: err,
@@ -344,7 +357,18 @@ func migrateLocker(c *cobra.Command, args []string) error {
 }
 
 func roundNext(n, next uint) uint {
-	return uint(math.Round(float64(n)/float64(next))) * next + next
+	return uint(math.Round(float64(n)/float64(next)))*next + next
+}
+
+func promptDescription() string {
+	fmt.Print("Please enter a short description for the migration file. Or press Enter to skip.\n>")
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	clean := sanitize.Name(scanner.Text())
+	if len(clean) == 1 && clean[0] == '.' { // When Enter is only pressed to skip
+		return ""
+	}
+	return clean
 }
 
 func createMigrationFile(dir string, name string, digits int) (string, error) {

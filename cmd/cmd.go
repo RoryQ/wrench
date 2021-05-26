@@ -32,6 +32,7 @@ const (
 	flagNameInstance            = "instance"
 	flagNameDatabase            = "database"
 	flagNameDirectory           = "directory"
+	flagNameCreateNoPrompt = "no-prompt"
 	flagCredentialsFile         = "credentials_file"
 	flagStaticDataTablesFile    = "static_data_tables_file"
 	flagNameSchemaFile          = "schema_file"

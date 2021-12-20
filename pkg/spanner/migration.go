@@ -22,9 +22,11 @@ package spanner
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -129,6 +131,15 @@ func LoadMigrations(dir string) (Migrations, error) {
 			Statements: statements,
 			kind:       kind,
 		})
+	}
+
+	sort.Sort(migrations)
+	seen := map[uint]*Migration{}
+	for _, m := range migrations {
+		if dupe, got := seen[m.Version]; got {
+			return nil, fmt.Errorf("migration %d %s has a duplicate version number of %s", m.Version, m.Name, dupe.Name)
+		}
+		seen[m.Version] = m
 	}
 
 	return migrations, nil

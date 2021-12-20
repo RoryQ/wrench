@@ -68,6 +68,16 @@ func TestLoadMigrations(t *testing.T) {
 	}
 }
 
+func TestLoadMigrationsDuplicates(t *testing.T) {
+	ms, err := LoadMigrations(filepath.Join("testdata", "duplicate"))
+	if err == nil {
+		t.Errorf("error should not be nil")
+	}
+	if len(ms) > 0 {
+		t.Errorf("migrations should be empty")
+	}
+}
+
 func Test_getStatementKind(t *testing.T) {
 	tests := []struct {
 		name      string

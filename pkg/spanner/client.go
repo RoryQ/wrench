@@ -151,6 +151,7 @@ func (c *Client) TruncateAllTables(ctx context.Context) error {
 	ri := c.spannerClient.Single().Query(ctx, spanner.Statement{
 		SQL: "SELECT table_name FROM information_schema.tables WHERE table_catalog = '' AND table_schema = ''",
 	})
+	defer ri.Stop()
 	err := ri.Do(func(row *spanner.Row) error {
 		t := &table{}
 		if err := row.ToStruct(t); err != nil {
@@ -752,6 +753,7 @@ AND table_name in (@version, @history, @indicator)`)
 	stmt.Params["history"] = tableName + historyStr
 	stmt.Params["indicator"] = upgradeIndicator
 	iter := c.spannerClient.Single().Query(ctx, stmt)
+	defer iter.Stop()
 
 	tables := make(map[string]bool)
 	err := iter.Do(func(r *spanner.Row) error {

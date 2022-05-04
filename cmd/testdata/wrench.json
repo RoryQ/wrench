@@ -3,6 +3,9 @@
     "JsonTable1",
     "JsonTable2"
   ],
+  "CustomOrderBy": {
+    "JsonTable1": "Column1 ASC, Column2 DESC"
+  },
   "Ignore other properties": {
     "other fields": 12345
   }

@@ -275,10 +275,10 @@ func (s StaticData) ToFileName() string {
 	return strings.ToLower(s.TableName) + ".sql"
 }
 
-func (c *Client) LoadStaticDatas(ctx context.Context, tables []string) ([]StaticData, error) {
+func (c *Client) LoadStaticDatas(ctx context.Context, tables []string, customSort map[string]string) ([]StaticData, error) {
 	datas := make([]StaticData, 0, len(tables))
 	for _, t := range tables {
-		d, err := c.loadStaticData(ctx, t)
+		d, err := c.loadStaticData(ctx, t, customSort[t])
 		if err != nil {
 			return nil, err
 		}
@@ -288,11 +288,11 @@ func (c *Client) LoadStaticDatas(ctx context.Context, tables []string) ([]Static
 	return datas, nil
 }
 
-func (c *Client) loadStaticData(ctx context.Context, table string) (StaticData, error) {
+func (c *Client) loadStaticData(ctx context.Context, table string, customSort string) (StaticData, error) {
 	data := StaticData{
 		TableName: table,
 	}
-	query, err := c.staticDataQuery(ctx, table)
+	query, err := c.staticDataQuery(ctx, table, customSort)
 	if err != nil {
 		return StaticData{}, err
 	}
@@ -316,33 +316,39 @@ func (c *Client) loadStaticData(ctx context.Context, table string) (StaticData, 
 	return data, nil
 }
 
-func (c *Client) staticDataQuery(ctx context.Context, table string) (spanner.Statement, error) {
-	var columnOrders []string
-	stmt := spanner.NewStatement(
-		"SELECT COLUMN_NAME, COLUMN_ORDERING FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
-			"WHERE INDEX_NAME='PRIMARY_KEY' AND TABLE_NAME=@tableName " +
-			"ORDER BY ORDINAL_POSITION")
-	stmt.Params["tableName"] = table
-	err := c.spannerClient.
-		Single().
-		Query(ctx, stmt).
-		Do(func(r *spanner.Row) error {
-			var name, order string
-			if err := r.Columns(&name, &order); err != nil {
-				return err
-			}
-
-			columnOrders = append(columnOrders, fmt.Sprintf("%s %s", name, order))
-
-			return nil
-		})
-	if err != nil {
-		return spanner.Statement{}, err
-	}
-
+func (c *Client) staticDataQuery(ctx context.Context, table, customOrderBy string) (spanner.Statement, error) {
 	var orderByClause string
-	if len(columnOrders) > 0 {
-		orderByClause = "\nORDER BY " + strings.Join(columnOrders, ", ")
+
+	// use primary key sort by default
+	if customOrderBy == "" {
+		var columnOrders []string
+		stmt := spanner.NewStatement(
+			"SELECT COLUMN_NAME, COLUMN_ORDERING FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
+				"WHERE INDEX_NAME='PRIMARY_KEY' AND TABLE_NAME=@tableName " +
+				"ORDER BY ORDINAL_POSITION")
+		stmt.Params["tableName"] = table
+		err := c.spannerClient.
+			Single().
+			Query(ctx, stmt).
+			Do(func(r *spanner.Row) error {
+				var name, order string
+				if err := r.Columns(&name, &order); err != nil {
+					return err
+				}
+
+				columnOrders = append(columnOrders, fmt.Sprintf("%s %s", name, order))
+
+				return nil
+			})
+		if err != nil {
+			return spanner.Statement{}, err
+		}
+
+		if len(columnOrders) > 0 {
+			orderByClause = "\nORDER BY " + strings.Join(columnOrders, ", ")
+		}
+	} else {
+		orderByClause = "\nORDER BY " + customOrderBy
 	}
 
 	return spanner.NewStatement("SELECT * FROM " + table + orderByClause), nil

@@ -91,6 +91,9 @@ func init() {
 		migrateLockerCmd,
 	)
 
+	migrateCreateCmd.Flags().SetNormalizeFunc(underscoreToDashes)
+	migrateUpCmd.Flags().SetNormalizeFunc(underscoreToDashes)
+
 	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
 	migrateCmd.PersistentFlags().String(flagNameDirectory, "", "Directory that migration files placed (required)")
 	migrateUpCmd.Flags().UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")

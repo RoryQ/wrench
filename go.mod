@@ -12,6 +12,7 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/kennygrant/sanitize v1.2.4
 	github.com/spf13/cobra v1.5.0
+	github.com/spf13/pflag v1.0.5
 	google.golang.org/api v0.90.0
 	google.golang.org/genproto v0.0.0-20220728213248-dd149ef739b9
 	google.golang.org/grpc v1.48.0

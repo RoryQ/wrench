@@ -11,6 +11,7 @@ This is a fork of https://github.com/cloudspannerecosystem/wrench with the follo
 - Export schema to discrete files. Instead of a `schema.sql` containing all the objects. If this is checked into source control this makes diff-ing more consistent as it follows a hierarchy vs moving around in a single file. e.g. `[table/table1.sql, table/table2.sql, index/index1.sql]`
 - Export static data tables by specifying in a `static_data_tables.txt` or `wrench.json` file.
 - Automatically upgrades tracking tables used by [cloudspannerecosystem/wrench](https://github.com/cloudspannerecosystem/wrench) or [golang-migrate/migrate](https://github.com/golang-migrate/migrate) to this version.
+- Skip Versions. Flag `--skip-versions` can be set to skip migrations. Useful for working around unsupported features in the emulator during local development.
 
 ## Onboarding existing databases to wrench
 

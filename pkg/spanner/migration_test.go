@@ -31,7 +31,7 @@ const (
 )
 
 func TestLoadMigrations(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"))
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +68,23 @@ func TestLoadMigrations(t *testing.T) {
 	}
 }
 
+func TestLoadMigrationsSkipVersion(t *testing.T) {
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(ms) != 1 {
+		t.Fatalf("migrations length want 1, but got %v", len(ms))
+	}
+
+	if ms[0].Version != 4 {
+		t.Errorf("version want %v, but got %v", 4, ms[0].Version)
+	}
+}
+
 func TestLoadMigrationsDuplicates(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "duplicate"))
+	ms, err := LoadMigrations(filepath.Join("testdata", "duplicate"), nil)
 	if err == nil {
 		t.Errorf("error should not be nil")
 	}

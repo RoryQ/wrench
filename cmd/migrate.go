@@ -91,8 +91,12 @@ func init() {
 		migrateLockerCmd,
 	)
 
+	migrateCreateCmd.Flags().SetNormalizeFunc(underscoreToDashes)
+	migrateUpCmd.Flags().SetNormalizeFunc(underscoreToDashes)
+
 	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
 	migrateCmd.PersistentFlags().String(flagNameDirectory, "", "Directory that migration files placed (required)")
+	migrateUpCmd.Flags().UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")
 }
 
 func migrateCreate(c *cobra.Command, args []string) error {
@@ -150,6 +154,14 @@ func migrateUp(c *cobra.Command, args []string) error {
 		limit = n
 	}
 
+	toSkip, err := c.Flags().GetUintSlice(flagSkipVersions)
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
+
 	client, err := newSpannerClient(ctx, c)
 	if err != nil {
 		return err
@@ -172,7 +184,7 @@ func migrateUp(c *cobra.Command, args []string) error {
 	}
 
 	dir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
-	migrations, err := spanner.LoadMigrations(dir)
+	migrations, err := spanner.LoadMigrations(dir, toSkip)
 	if err != nil {
 		return &Error{
 			cmd: c,
@@ -376,7 +388,7 @@ func createMigrationFile(dir string, name string, digits int) (string, error) {
 		return "", errors.New("Invalid migration file name.")
 	}
 
-	ms, err := spanner.LoadMigrations(dir)
+	ms, err := spanner.LoadMigrations(dir, nil)
 	if err != nil {
 		return "", err
 	}

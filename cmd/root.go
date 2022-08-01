@@ -20,8 +20,10 @@
 package cmd
 
 import (
+	"github.com/spf13/pflag"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -57,6 +59,8 @@ func Execute() error {
 func init() {
 	cobra.EnableCommandSorting = false
 
+	rootCmd.PersistentFlags().SetNormalizeFunc(underscoreToDashes)
+
 	rootCmd.SilenceUsage = true
 	rootCmd.SilenceErrors = true
 
@@ -78,9 +82,12 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&staticDataTablesFile, flagStaticDataTablesFile, "", "File containing list of static data tables to track (optional)")
 	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, uuid.New().String(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
-
 	rootCmd.Version = Version
 	rootCmd.SetVersionTemplate(versionTemplate)
+}
+
+func underscoreToDashes(f *pflag.FlagSet, name string) pflag.NormalizedName {
+	return pflag.NormalizedName(strings.ReplaceAll(name, "_", "-"))
 }
 
 func spannerProjectID() string {

@@ -92,10 +92,15 @@ func (ms Migrations) Less(i, j int) bool {
 	return ms[i].Version < ms[j].Version
 }
 
-func LoadMigrations(dir string) (Migrations, error) {
+func LoadMigrations(dir string, toSkipSlice []uint) (Migrations, error) {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return nil, err
+	}
+
+	toSkipMap := map[uint64]bool{}
+	for _, skip := range toSkipSlice {
+		toSkipMap[uint64(skip)] = true
 	}
 
 	var migrations Migrations
@@ -111,6 +116,10 @@ func LoadMigrations(dir string) (Migrations, error) {
 
 		version, err := strconv.ParseUint(matches[1], 10, 64)
 		if err != nil {
+			continue
+		}
+
+		if toSkipMap[version] {
 			continue
 		}
 

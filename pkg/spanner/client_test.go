@@ -200,7 +200,7 @@ func TestExecuteMigrations(t *testing.T) {
 		t.Fatalf("failed to apply mutation: %v", err)
 	}
 
-	migrations, err := LoadMigrations("testdata/migrations")
+	migrations, err := LoadMigrations("testdata/migrations", nil)
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestHotfixMigration(t *testing.T) {
 	defer done()
 
 	// apply changes from "trunk": [100, 200]
-	migrations, err := LoadMigrations("testdata/hotfix/a")
+	migrations, err := LoadMigrations("testdata/hotfix/a", nil)
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestHotfixMigration(t *testing.T) {
 	ensureMigrationHistoryRecord(t, ctx, client, 200, false)
 
 	// apply changes from "hotfix" branch: [101]
-	migrations, err = LoadMigrations("testdata/hotfix/b")
+	migrations, err = LoadMigrations("testdata/hotfix/b", nil)
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestUpgrade(t *testing.T) {
 		defer done()
 
 		// run migrations
-		migrations, err := LoadMigrations("testdata/migrations")
+		migrations, err := LoadMigrations("testdata/migrations", nil)
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}

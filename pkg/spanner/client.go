@@ -52,7 +52,8 @@ const (
 
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
-	ddlParse                  = regexp.MustCompile(`(?i)create +(?P<ObjectType>(table|index)) +(?P<ObjectName>\w+).+`)
+	indexOptions              = `unique\s+|null\s+filtered\s+|unique\s+null\s+filtered\s+`
+	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index))\s+(?P<ObjectName>\w+).+`)
 )
 
 type UpgradeStatus string
@@ -200,9 +201,15 @@ func parseDDL(statement string) (ddl SchemaDDL, err error) {
 		}
 	}
 
+	objectType := strings.ToLower(matches["ObjectType"])
+	// put all indexes in the same group
+	if strings.HasSuffix(objectType, "index") {
+		objectType = "index"
+	}
+
 	ddl = SchemaDDL{
 		Statement:  statement,
-		ObjectType: strings.ToLower(matches["ObjectType"]),
+		ObjectType: objectType,
 		Filename:   fmt.Sprintf("%s.sql", strings.ToLower(matches["ObjectName"])),
 	}
 

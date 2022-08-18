@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -637,5 +638,84 @@ func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func())
 			t.Fatalf("failed to delete database: %v", err)
 		}
 		t.Log("dropped database " + database)
+	}
+}
+
+func Test_parseDDL(t *testing.T) {
+	type args struct {
+		statement string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantDdl SchemaDDL
+		wantErr bool
+	}{
+		{
+			name: "CREATE TABLE",
+			args: args{"CREATE TABLE Example(ID string) PRIMARY KEY(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE TABLE Example(ID string) PRIMARY KEY(ID)",
+				Filename:   "example.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE INDEX",
+			args: args{"CREATE INDEX IX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE NULL FILTERED INDEX",
+			args: args{"CREATE NULL FILTERED INDEX NFX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE NULL FILTERED INDEX NFX_Example ON Example(ID)",
+				Filename:   "nfx_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE UNIQUE INDEX",
+			args: args{"CREATE UNIQUE INDEX UX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE UNIQUE INDEX UX_Example ON Example(ID)",
+				Filename:   "ux_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE UNIQUE NULL FILTERED INDEX",
+			args: args{"CREATE UNIQUE NULL FILTERED INDEX UX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE UNIQUE NULL FILTERED INDEX UX_Example ON Example(ID)",
+				Filename:   "ux_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE		UNIQUE  NULL   	FILTERED   INDEX",
+			args: args{"CREATE\t\tUNIQUE  NULL   \tFILTERED   INDEX UX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE\t\tUNIQUE  NULL   \tFILTERED   INDEX UX_Example ON Example(ID)",
+				Filename:   "ux_example.sql",
+				ObjectType: "index",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotDdl, err := parseDDL(tt.args.statement)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseDDL() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(gotDdl, tt.wantDdl) {
+				t.Errorf("parseDDL() gotDdl = %v, want %v", gotDdl, tt.wantDdl)
+			}
+		})
 	}
 }

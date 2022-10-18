@@ -3,7 +3,6 @@ module github.com/roryq/wrench
 require (
 	cloud.google.com/go v0.104.0
 	cloud.google.com/go/spanner v1.39.0
-	github.com/bazelbuild/bazelisk v1.14.0
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/cncf/xds/go v0.0.0-20211216145620-d92e9ce0af51 // indirect
 	github.com/envoyproxy/protoc-gen-validate v0.6.2 // indirect

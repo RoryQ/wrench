@@ -1,35 +1,28 @@
-bin/bazelisk: tools.go
-	go build -o bin/bazelisk github.com/bazelbuild/bazelisk
-
 .PHONY: test
-test: bin/bazelisk
-	bin/bazelisk test \
-		--test_env SPANNER_PROJECT_ID=$$SPANNER_PROJECT_ID \
-		--test_env SPANNER_INSTANCE_ID=$$SPANNER_INSTANCE_ID \
-		--test_env SPANNER_DATABASE_ID=$$SPANNER_DATABASE_ID \
-		--test_timeout 600 \
-		--test_output streamed \
-		--features race \
-		//...
+test: _spanner-up
+	go test -race -count=1 ./...
+	-@make _spanner-down
 
-.PHONY: dep
-dep: bin/bazelisk
-	go mod tidy
-	bin/bazelisk run //:gazelle
-	bin/bazelisk run //:gazelle -- \
-		update-repos \
-		-from_file go.mod \
-		-to_macro bazel/deps.bzl%wrench_deps \
-		-prune
+.PHONY: _spanner-up
+_spanner-up:
+	-@make _spanner-down >/dev/null 2>&1 # clear previous
+	@docker run --rm --detach -p 9010 -p 9020 \
+		--env SPANNER_PROJECT_ID=$(S_PROJECT) \
+		--env SPANNER_INSTANCE_ID=$(S_INSTANCE) \
+		--name spanner-tests \
+		roryq/spanner-emulator:latest >/dev/null 2>&1
+	@sleep 2
 
-.PHONY: build
-build: bin/bazelisk
-	bin/bazelisk build //:wrench
 
-.PHONY: image
-image: bin/bazelisk
-	bin/bazelisk build --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 //:image
+.PHONY: _spanner-down
+_spanner-down:
+	-@docker stop spanner-tests >/dev/null 2>&1
 
-.PHONY: registry
-registry: bin/bazelisk
-	bin/bazelisk run --platforms=@io_bazel_rules_go//go/toolchain:linux_amd64 //:registry
+S_SPANNER_PORT = $(shell docker port spanner-tests 9010 | sed 's/0.0.0.0/localhost/')
+S_PROJECT = test-project
+S_INSTANCE = my-instance
+
+test: export SPANNER_EMULATOR_HOST=$(S_SPANNER_PORT)
+test: export SPANNER_PROJECT_ID=$(S_PROJECT)
+test: export SPANNER_INSTANCE_ID=$(S_INSTANCE)
+

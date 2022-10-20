@@ -71,13 +71,26 @@ Available Commands:
   help          Help about any command
   completion    Generate the autocompletion script for the specified shell
 
+Migrate database
+
+Usage:
+  wrench migrate [command]
+
+Available Commands:
+  create      Create a set of sequential up migrations in directory
+  up          Apply all or N up migrations
+  version     Print current migration version
+  history     Print migration version history
+  setup-lock  Initialise or reset the migration lock
+  repair      If a migration has failed, clean up any schema changes manually then repair the history with this command
+
 Flags:
       --credentials-file string          Specify Credentials File
       --database string                  Cloud Spanner database name (optional. if not set, will use $SPANNER_DATABASE_ID value)
       --directory string                 Directory that schema file placed (required)
   -h, --help                             help for wrench
       --instance string                  Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value) (default "test-instance")
-      --lock-identifier string           Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated) (default "7da31609-e4c8-4aae-9f7c-b9db98c231e1")
+      --lock-identifier string           Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated) (default "58a4394a-19f9-4dbf-880d-20b6cf169d46")
       --project string                   GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value) (default "my-project")
       --schema-file string               Name of schema file (optional. if not set, will use default 'schema.sql' file name)
       --sequence-interval uint16         Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1) (default 1)

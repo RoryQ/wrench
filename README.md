@@ -34,71 +34,13 @@ databases but recreating for new databases.
 You can simply drop the `SchemaMigrationsHistory` and `SchemaMigrationsLock` table as the `SchemaMigrations` will be in sync.
 ___
 
-[![cloudspannerecosystem](https://circleci.com/gh/cloudspannerecosystem/wrench.svg?style=svg)](https://circleci.com/gh/cloudspannerecosystem/wrench)
-
-`wrench` is a schema management tool for [Cloud Spanner](https://cloud.google.com/spanner/).
-
-Please feel free to report issues and send pull requests, but note that this
-application is not officially supported as part of the Cloud Spanner product.
-
-```sh
-$ cat ./_examples/schema.sql
-CREATE TABLE Singers (
-  SingerID STRING(36) NOT NULL,
-  FirstName STRING(1024),
-) PRIMARY KEY(SingerID);
-
-# create database with ./_examples/schema.sql
-$ wrench create --directory ./_examples
-
-# create migration file
-$ wrench migrate create --directory ./_examples
-_examples/migrations/000001.sql is created
-
-# edit _examples/migrations/000001.sql
-$ cat ./_examples/migrations/000001.sql
-ALTER TABLE Singers ADD COLUMN LastName STRING(1024);
-
-# execute migration
-$ wrench migrate up --directory ./_examples
-
-# load ddl from database to file ./_examples/schema.sql
-$ wrench load --directory ./_examples
-
-# show time and date of migrations
-$ wrench migrate history
-Version	Dirty	Created					Modified
-1	false	2020-06-16 08:07:11.763755 +0000 UTC	2020-06-16 08:07:11.76998 +0000 UTC
-
-# finally, we have successfully migrated database!
-$ cat ./_examples/schema.sql
-CREATE TABLE Singers (
-  SingerID STRING(36) NOT NULL,
-  FirstName STRING(1024),
-  LastName STRING(1024),
-) PRIMARY KEY(SingerID);
-
-CREATE TABLE SchemaMigrations (
-  Version INT64 NOT NULL,
-  Dirty BOOL NOT NULL,
-) PRIMARY KEY(Version);
-
-CREATE TABLE SchemaMigrationsHistory (
-  Version INT64 NOT NULL,
-  Dirty BOOL NOT NULL,
-  Created TIMESTAMP NOT NULL OPTIONS (
-    allow_commit_timestamp = true
-  ),
-  Modified TIMESTAMP NOT NULL OPTIONS (
-    allow_commit_timestamp = true
-  ),
-) PRIMARY KEY(Version);
-```
-
 ## Installation
 
-Get binary from [release page](https://github.com/cloudspannerecosystem/wrench/releases).
-Or, you can use Docker container: [mercari/wrench](https://hub.docker.com/r/mercari/wrench).
+With go 1.18 or higher:
+
+```shell
+go install github.com/roryq/wrench@latest
+```
 
 ## Usage
 

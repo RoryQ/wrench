@@ -12,6 +12,8 @@ This is a fork of https://github.com/cloudspannerecosystem/wrench with the follo
 - Export static data tables by specifying in a `static_data_tables.txt` or `wrench.json` file.
 - Automatically upgrades tracking tables used by [cloudspannerecosystem/wrench](https://github.com/cloudspannerecosystem/wrench) or [golang-migrate/migrate](https://github.com/golang-migrate/migrate) to this version.
 - Skip Versions. Flag `--skip-versions` can be set to skip migrations. Useful for working around unsupported features in the emulator during local development.
+- Repair dirty migrations. If a migration fails the version is marked as dirty. Any partial changes should be reverted manually and the history cleaned
+using `migrate repair`.
 
 ## Onboarding existing databases to wrench
 

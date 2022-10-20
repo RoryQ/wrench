@@ -754,16 +754,19 @@ func TestClient_RepairMigration(t *testing.T) {
 	assert.EqualValues(t, 4, version) // failed on 4
 	assert.True(t, isDirty)
 
-	// repair migration
-	err = client.RepairMigration(ctx, migrationTable)
-	assert.NoError(t, err)
+	// is idempotent
+	for i := 0; i < 2; i++ {
+		// repair migration
+		err = client.RepairMigration(ctx, migrationTable)
+		assert.NoError(t, err)
 
-	assertDirtyCount(dirty, 0)
-	assertDirtyCount(clean, 1)
-	version, isDirty, err = client.GetSchemaMigrationVersion(ctx, migrationTable)
-	assert.NoError(t, err)
-	assert.EqualValues(t, 2, version) // back to 2 since 3 was skipped
-	assert.False(t, isDirty)
+		assertDirtyCount(dirty, 0)
+		assertDirtyCount(clean, 1)
+		version, isDirty, err = client.GetSchemaMigrationVersion(ctx, migrationTable)
+		assert.NoError(t, err)
+		assert.EqualValues(t, 2, version) // back to 2 since 3 was skipped
+		assert.False(t, isDirty)
+	}
 }
 
 func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string, toSkip ...uint) error {

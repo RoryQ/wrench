@@ -3,6 +3,14 @@ test: _spanner-up
 	go test -race -count=1 ./...
 	-@make _spanner-down
 
+
+.PHONY: README.md
+README.md:
+	go run tools/usage/main.go
+
+
+
+
 .PHONY: _spanner-up
 _spanner-up:
 	-@make _spanner-down >/dev/null 2>&1 # clear previous

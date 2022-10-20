@@ -69,7 +69,6 @@ Available Commands:
   migrate       Migrate database
   truncate      Truncate all tables without deleting a database
   help          Help about any command
-  completion    Generate the autocompletion script for the specified shell
 
 Migrate database
 

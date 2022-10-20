@@ -20,10 +20,11 @@
 package cmd
 
 import (
-	"github.com/spf13/pflag"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/spf13/pflag"
 
 	"github.com/google/uuid"
 
@@ -80,10 +81,18 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&schemaFile, flagNameSchemaFile, "", "Name of schema file (optional. if not set, will use default 'schema.sql' file name)")
 	rootCmd.PersistentFlags().StringVar(&credentialsFile, flagCredentialsFile, "", "Specify Credentials File")
 	rootCmd.PersistentFlags().StringVar(&staticDataTablesFile, flagStaticDataTablesFile, "", "File containing list of static data tables to track (optional)")
-	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, uuid.New().String(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
+	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, getLockIdentifier(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
 	rootCmd.Version = Version
 	rootCmd.SetVersionTemplate(versionTemplate)
+}
+
+func getLockIdentifier() string {
+	lockID := os.Getenv("WRENCH_LOCK_IDENTIFIER")
+	if lockID != "" {
+		return lockID
+	}
+	return uuid.New().String()
 }
 
 func underscoreToDashes(f *pflag.FlagSet, name string) pflag.NormalizedName {

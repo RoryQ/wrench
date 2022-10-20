@@ -142,6 +142,14 @@ $ wrench load --directory ./_examples
 
 This loads schema DDL from database and writes it to `./_examples/schema.sql`.
 
+### Load schema from database to a file per object
+
+```sh
+$ wrench load-discrete --directory ./_examples
+```
+
+This loads schema DDL from database and writes it to `./_examples/schema.sql`.
+
 ### Create migration file
 
 ```sh

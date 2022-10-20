@@ -41,6 +41,7 @@ const (
 	ErrorCodeWaitOperation
 	ErrorCodeEnsureMigrationTables
 	ErrorCodeCompleteUpgrade
+	ErrorCodeUndirtyMigration
 )
 
 type Error struct {

@@ -33,8 +33,9 @@ import (
 	"text/tabwriter"
 
 	"github.com/kennygrant/sanitize"
-	"github.com/roryq/wrench/pkg/spanner"
 	"github.com/spf13/cobra"
+
+	"github.com/roryq/wrench/pkg/spanner"
 )
 
 const (
@@ -66,9 +67,13 @@ func init() {
 		RunE:  migrateVersion,
 	}
 	migrateSetCmd := &cobra.Command{
-		Use:   "set V",
-		Short: "Set version V but don't run migration (ignores dirty state)",
-		RunE:  migrateSet,
+		Deprecated: "If you need to clean a dirty migration run `wrench migrate repair`",
+		Hidden:     true,
+	}
+	migrateRepairCmd := &cobra.Command{
+		Use:   "repair",
+		Short: "If a migration has failed, clean up any schema changes manually then repair the history with this command",
+		RunE:  migrateRepair,
 	}
 	migrateHistoryCmd := &cobra.Command{
 		Use:   "history",
@@ -89,6 +94,7 @@ func init() {
 		migrateSetCmd,
 		migrateHistoryCmd,
 		migrateLockerCmd,
+		migrateRepairCmd,
 	)
 
 	migrateCreateCmd.Flags().SetNormalizeFunc(underscoreToDashes)
@@ -296,22 +302,8 @@ func migrateHistory(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func migrateSet(c *cobra.Command, args []string) error {
+func migrateRepair(c *cobra.Command, args []string) error {
 	ctx := context.Background()
-
-	if len(args) == 0 {
-		return &Error{
-			cmd: c,
-			err: errors.New("Parameters are not passed."),
-		}
-	}
-	version, err := strconv.Atoi(args[0])
-	if err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
-		}
-	}
 
 	client, err := newSpannerClient(ctx, c)
 	if err != nil {
@@ -340,7 +332,7 @@ func migrateSet(c *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := client.SetSchemaMigrationVersion(ctx, uint(version), false, migrationTableName); err != nil {
+	if err := client.RepairMigration(ctx, migrationTableName); err != nil {
 		return &Error{
 			cmd: c,
 			err: err,

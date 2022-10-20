@@ -30,7 +30,11 @@ import (
 
 	"cloud.google.com/go/spanner"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
+
+	"github.com/roryq/wrench/pkg/spannerz"
 )
 
 const (
@@ -352,7 +356,7 @@ func TestSetSchemaMigrationVersion(t *testing.T) {
 	nextVersion := 2
 	nextDirty := true
 
-	if err := client.SetSchemaMigrationVersion(ctx, uint(nextVersion), nextDirty, migrationTable); err != nil {
+	if err := client.setSchemaMigrationVersion(ctx, uint(nextVersion), nextDirty, migrationTable); err != nil {
 		t.Fatalf("failed to set version: %v", err)
 	}
 
@@ -584,7 +588,6 @@ func TestUpgrade(t *testing.T) {
 			t.Errorf("missing version in history table %+v", actual)
 		}
 	})
-
 }
 
 func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func()) {
@@ -718,4 +721,56 @@ func Test_parseDDL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClient_RepairMigration(t *testing.T) {
+	ctx := context.Background()
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	// add LastName NULLABLE
+	err := migrateUpDir(t, ctx, client, "testdata/migrations", 3, 4)
+	require.NoError(t, err, "error running migrations")
+
+	// add row with NULL LastName
+	_, err = client.spannerClient.Apply(ctx, []*spanner.Mutation{spanner.Insert(singerTable, []string{"SingerID", "FirstName"}, []any{"ABC", "Fred"})})
+	require.NoError(t, err, "failed to insert row")
+
+	// make dirty with bad migration
+	err = migrateUpDir(t, ctx, client, "testdata/migrations", 3)
+	assert.EqualError(t, err, "Cannot specify a null value for column: LastName in table: Singers referenced by key: {String(\"ABC\")}")
+
+	assertDirtyCount := func(isDirty bool, expected int64) {
+		dirtyCount, err := spannerz.ReadColumnSQL[int64](ctx, client.spannerClient.Single(),
+			fmt.Sprintf("select count(1) from SchemaMigrationsHistory where Dirty = %v", isDirty))
+		assert.NoError(t, err)
+		assert.EqualValues(t, expected, dirtyCount)
+	}
+	const dirty, clean = true, false
+	assertDirtyCount(dirty, 1)
+	assertDirtyCount(clean, 1)
+	version, isDirty, err := client.GetSchemaMigrationVersion(ctx, migrationTable)
+	assert.NoError(t, err)
+	assert.EqualValues(t, 4, version) // failed on 4
+	assert.True(t, isDirty)
+
+	// repair migration
+	err = client.RepairMigration(ctx, migrationTable)
+	assert.NoError(t, err)
+
+	assertDirtyCount(dirty, 0)
+	assertDirtyCount(clean, 1)
+	version, isDirty, err = client.GetSchemaMigrationVersion(ctx, migrationTable)
+	assert.NoError(t, err)
+	assert.EqualValues(t, 2, version) // back to 2 since 3 was skipped
+	assert.False(t, isDirty)
+}
+
+func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string, toSkip ...uint) error {
+	t.Helper()
+	migrations, err := LoadMigrations(dir, toSkip)
+	if err != nil {
+		return err
+	}
+	return client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable)
 }

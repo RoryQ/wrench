@@ -28,8 +28,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/roryq/wrench/pkg/spanner/dataloader"
+	"github.com/roryq/wrench/pkg/spannerz"
+
 	"google.golang.org/grpc/codes"
+
+	"github.com/roryq/wrench/pkg/spanner/dataloader"
 
 	"cloud.google.com/go/spanner"
 	admin "cloud.google.com/go/spanner/admin/database/apiv1"
@@ -194,7 +197,7 @@ type SchemaDDL struct {
 
 func parseDDL(statement string) (ddl SchemaDDL, err error) {
 	r := ddlParse.FindStringSubmatch(statement)
-	var matches = make(map[string]string)
+	matches := make(map[string]string)
 	for i, n := range ddlParse.SubexpNames() {
 		if i != 0 && n != "" && i < len(r) {
 			matches[n] = r[i]
@@ -231,7 +234,7 @@ func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
 		}
 	}
 
-	var ddls = make([]SchemaDDL, 0)
+	ddls := make([]SchemaDDL, 0)
 	for i := range res.Statements {
 		ddl, err := parseDDL(res.Statements[i])
 		if err != nil {
@@ -442,6 +445,7 @@ func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string) (
 
 	return numAffectedRows, nil
 }
+
 func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) error {
 	err := c.backfillMigrations(ctx, migrations, tableName)
 	if err != nil {
@@ -493,7 +497,8 @@ func (c *Client) upsertVersionHistory(ctx context.Context, rw *spanner.ReadWrite
 			return rw.BufferWrite([]*spanner.Mutation{
 				spanner.Insert(historyTableName,
 					[]string{"Version", "Dirty", "Created", "Modified"},
-					[]interface{}{version, dirty, spanner.CommitTimestamp, spanner.CommitTimestamp})})
+					[]interface{}{version, dirty, spanner.CommitTimestamp, spanner.CommitTimestamp}),
+			})
 		}
 		return err
 	}
@@ -502,7 +507,8 @@ func (c *Client) upsertVersionHistory(ctx context.Context, rw *spanner.ReadWrite
 	return rw.BufferWrite([]*spanner.Mutation{
 		spanner.Update(historyTableName,
 			[]string{"Version", "Dirty", "Modified"},
-			[]interface{}{version, dirty, spanner.CommitTimestamp})})
+			[]interface{}{version, dirty, spanner.CommitTimestamp}),
+	})
 }
 
 func (c *Client) markUpgradeComplete(ctx context.Context) error {
@@ -586,7 +592,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			continue
 		}
 
-		if err := c.SetSchemaMigrationVersion(ctx, m.Version, true, tableName); err != nil {
+		if err := c.setSchemaMigrationVersion(ctx, m.Version, true, tableName); err != nil {
 			return &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
@@ -628,7 +634,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			fmt.Printf("%d/up\n", m.Version)
 		}
 
-		if err := c.SetSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
+		if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
 			return &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
@@ -683,16 +689,10 @@ func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string
 	return uint(v), dirty, nil
 }
 
-func (c *Client) SetSchemaMigrationVersion(ctx context.Context, version uint, dirty bool, tableName string) error {
+// setSchemaMigrationVersion will set a specific version in the version and history table without checking existing state
+func (c *Client) setSchemaMigrationVersion(ctx context.Context, version uint, dirty bool, tableName string) error {
 	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
-		m := []*spanner.Mutation{
-			spanner.Delete(tableName, spanner.AllKeys()),
-			spanner.Insert(
-				tableName,
-				[]string{"Version", "Dirty"},
-				[]interface{}{int64(version), dirty},
-			),
-		}
+		m := setSchemaVersionMutations(tableName, version, dirty)
 		if err := tx.BufferWrite(m); err != nil {
 			return err
 		}
@@ -707,6 +707,75 @@ func (c *Client) SetSchemaMigrationVersion(ctx context.Context, version uint, di
 	}
 
 	return nil
+}
+
+func setSchemaVersionMutations(tableName string, version uint, dirty bool) []*spanner.Mutation {
+	m := []*spanner.Mutation{
+		spanner.Delete(tableName, spanner.AllKeys()),
+		spanner.Insert(
+			tableName,
+			[]string{"Version", "Dirty"},
+			[]interface{}{int64(version), dirty},
+		),
+	}
+	return m
+}
+
+// RepairMigration will delete the dirty rows in the version and history tables
+func (c *Client) RepairMigration(ctx context.Context, tableName string) error {
+	tableNameHistory := tableName + historyStr
+
+	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+		m, err := deleteDirtyHistory(ctx, tx, tableNameHistory)
+		if err != nil {
+			return err
+		}
+
+		version, err := resetSchemaVersion(ctx, tx, tableNameHistory, err, tableName)
+		if err != nil {
+			return err
+		}
+		m = append(m, version...)
+
+		return tx.BufferWrite(m)
+	})
+	if err != nil {
+		return &Error{
+			Code: ErrorCodeUndirtyMigration,
+			err:  err,
+		}
+	}
+
+	return nil
+}
+
+func resetSchemaVersion(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string, err error, tableName string) ([]*spanner.Mutation, error) {
+	latestSQL := "select * from " + tableNameHistory + " where dirty = FALSE order by version limit 1"
+	latest, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, latestSQL)
+	if err != nil {
+		return nil, err
+	}
+	if len(latest) != 1 {
+		return nil, errors.New("no undirty versions found")
+	}
+	version := setSchemaVersionMutations(tableName, uint(latest[0].Version), false)
+	return version, nil
+}
+
+func deleteDirtyHistory(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string) ([]*spanner.Mutation, error) {
+	sql := "select * from " + tableNameHistory + " where dirty = TRUE"
+	dirty, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := []spanner.Key{}
+	for _, record := range dirty {
+		keys = append(keys, spanner.Key{record.Version})
+	}
+
+	m := []*spanner.Mutation{spanner.Delete(tableNameHistory, spanner.KeySetFromKeys(keys...))}
+	return m, nil
 }
 
 func (c *Client) Close() error {
@@ -864,7 +933,8 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 				return trx.BufferWrite([]*spanner.Mutation{
 					spanner.Insert(tableName,
 						[]string{"ID"},
-						[]interface{}{spanner.NullInt64{}})})
+						[]interface{}{spanner.NullInt64{}}),
+				})
 			}
 			return err
 		}
@@ -877,7 +947,8 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 		return trx.BufferWrite([]*spanner.Mutation{
 			spanner.Update(tableName,
 				[]string{"ID", "LockIdentifier", "Expiry"},
-				[]interface{}{spanner.NullInt64{}, spanner.NullString{}, spanner.NullTime{}})})
+				[]interface{}{spanner.NullInt64{}, spanner.NullString{}, spanner.NullTime{}}),
+		})
 	})
 
 	return err
@@ -924,7 +995,7 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 		return lock, err
 	}
 
-	//fmt.Printf("%v %s %v\n", lock.Success, lock.LockIdentifier, lock.Expiry)
+	// fmt.Printf("%v %s %v\n", lock.Success, lock.LockIdentifier, lock.Expiry)
 
 	lock.Release = func() {
 		c.releaseMigrationLock(ctx, tableName, lockIdentifier)
@@ -942,7 +1013,7 @@ func (c *Client) releaseMigrationLock(ctx context.Context, tableName, lockIdenti
 		if err != nil {
 			return err
 		}
-		//log.Printf("release migration lock %s %v\n", lockIdentifier, rc == 1)
+		// log.Printf("release migration lock %s %v\n", lockIdentifier, rc == 1)
 		return nil
 	})
 	if err != nil {

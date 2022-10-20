@@ -5,7 +5,7 @@ on:
   pull_request:
     branches:
       - '**'
-name: Generate README
+name: Update README check
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -21,5 +21,5 @@ jobs:
       - name: generate README.md
         run: make README.md
 
-      - name: diff
+      - name: check for uncommitted changes
         run: git diff --exit-code

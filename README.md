@@ -69,6 +69,7 @@ Available Commands:
   migrate       Migrate database
   truncate      Truncate all tables without deleting a database
   help          Help about any command
+  completion    Generate the autocompletion script for the specified shell
 
 Migrate database
 
@@ -88,9 +89,9 @@ Flags:
       --database string                  Cloud Spanner database name (optional. if not set, will use $SPANNER_DATABASE_ID value)
       --directory string                 Directory that schema file placed (required)
   -h, --help                             help for wrench
-      --instance string                  Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value) (default "test-instance")
+      --instance string                  Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)
       --lock-identifier string           Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated) (default "58a4394a-19f9-4dbf-880d-20b6cf169d46")
-      --project string                   GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value) (default "my-project")
+      --project string                   GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)
       --schema-file string               Name of schema file (optional. if not set, will use default 'schema.sql' file name)
       --sequence-interval uint16         Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1) (default 1)
       --static-data-tables-file string   File containing list of static data tables to track (optional)

@@ -6,6 +6,8 @@ test: _spanner-up
 
 .PHONY: README.md
 README.md: export WRENCH_LOCK_IDENTIFIER=58a4394a-19f9-4dbf-880d-20b6cf169d46
+README.md: export SPANNER_PROJECT_ID=
+README.md: export SPANNER_INSTANCE_ID=
 README.md:
 	go run tools/usage/main.go
 

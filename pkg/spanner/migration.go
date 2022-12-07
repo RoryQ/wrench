@@ -46,9 +46,10 @@ var (
 
 	dmlAnyRegex = regexp.MustCompile("^(UPDATE|DELETE|INSERT)[\t\n\f\r ].*")
 
-	// INSERT statements are not supported for partitioned DML. Although not every DML can be partitioned
+	// 1. INSERT statements are not supported for partitioned DML. Although not every DML can be partitioned
 	// as it must be idempotent. This probably isn't solvable with more regexes.
-	notPartitionedDmlRegex = regexp.MustCompile("INSERT")
+	// 2. UPDATE or DELETE statements with a SELECT statement in the WHERE clause is not fully partitionable.
+	notPartitionedDmlRegex = regexp.MustCompile(`(?is)(?:insert)|(?:update|delete).*select`)
 
 	// matches a single comment on its own line
 	oneLineSingleComment = regexp.MustCompile(`(?m)^\s*--.*$`)

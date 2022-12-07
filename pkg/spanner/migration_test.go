@@ -285,6 +285,11 @@ func Test_isPartitionedDMLOnly(t *testing.T) {
 			false,
 		},
 		{
+			"DELETE without SELECT is partitioned DML",
+			`DELETE FROM Singers WHERE SingerId = 123`,
+			true,
+		},
+		{
 			"DELETE statment with SELECT is not fully partitioned DML",
 			TestStmtNonPartitionedDML,
 			false,

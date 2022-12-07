@@ -25,9 +25,10 @@ import (
 )
 
 const (
-	TestStmtDDL            = "ALTER TABLE Singers ADD COLUMN Foo STRING(MAX)"
-	TestStmtPartitionedDML = "UPDATE Singers SET FirstName = \"Bar\" WHERE SingerID = \"1\""
-	TestStmtDML            = "INSERT INTO Singers(FirstName) VALUES(\"Bar\")"
+	TestStmtDDL               = "ALTER TABLE Singers ADD COLUMN Foo STRING(MAX)"
+	TestStmtPartitionedDML    = "UPDATE Singers SET FirstName = \"Bar\" WHERE SingerID = \"1\""
+	TestStmtDML               = "INSERT INTO Singers(FirstName) VALUES(\"Bar\")"
+	TestStmtNonPartitionedDML = "DELETE FROM Singers WHERE SingerId NOT IN (SELECT SingerId FROM Concerts)"
 )
 
 func TestLoadMigrations(t *testing.T) {
@@ -257,6 +258,42 @@ CREATE TABLE Singers (
 		t.Run(tt.name, func(t *testing.T) {
 			if got := stripStatement(tt.statement); got != tt.want {
 				t.Errorf("stripStatement() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_isPartitionedDMLOnly(t *testing.T) {
+	tests := []struct {
+		name      string
+		statement string
+		want      bool
+	}{
+		{
+			"ALTER statement is DDL",
+			TestStmtDDL,
+			false,
+		},
+		{
+			"UPDATE statement is PartitionedDML",
+			TestStmtPartitionedDML,
+			true,
+		},
+		{
+			"INSERT statement is not prtitioned DML",
+			TestStmtDML,
+			false,
+		},
+		{
+			"DELETE statment with SELECT is not fully partitioned DML",
+			TestStmtNonPartitionedDML,
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isPartitionedDMLOnly(tt.statement); got != tt.want {
+				t.Errorf("isPartitionedDMLOnly() = %v, want %v", got, tt.want)
 			}
 		})
 	}

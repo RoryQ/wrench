@@ -673,10 +673,10 @@ func Test_parseDDL(t *testing.T) {
 			},
 		},
 		{
-			name: "CREATE NULL FILTERED INDEX",
-			args: args{"CREATE NULL FILTERED INDEX NFX_Example ON Example(ID)"},
+			name: "CREATE NULL_FILTERED INDEX",
+			args: args{"CREATE NULL_FILTERED INDEX NFX_Example ON Example(ID)"},
 			wantDdl: SchemaDDL{
-				Statement:  "CREATE NULL FILTERED INDEX NFX_Example ON Example(ID)",
+				Statement:  "CREATE NULL_FILTERED INDEX NFX_Example ON Example(ID)",
 				Filename:   "nfx_example.sql",
 				ObjectType: "index",
 			},
@@ -691,19 +691,19 @@ func Test_parseDDL(t *testing.T) {
 			},
 		},
 		{
-			name: "CREATE UNIQUE NULL FILTERED INDEX",
-			args: args{"CREATE UNIQUE NULL FILTERED INDEX UX_Example ON Example(ID)"},
+			name: "CREATE UNIQUE NULL_FILTERED INDEX",
+			args: args{"CREATE UNIQUE NULL_FILTERED INDEX UX_Example ON Example(ID)"},
 			wantDdl: SchemaDDL{
-				Statement:  "CREATE UNIQUE NULL FILTERED INDEX UX_Example ON Example(ID)",
+				Statement:  "CREATE UNIQUE NULL_FILTERED INDEX UX_Example ON Example(ID)",
 				Filename:   "ux_example.sql",
 				ObjectType: "index",
 			},
 		},
 		{
-			name: "CREATE		UNIQUE  NULL   	FILTERED   INDEX",
-			args: args{"CREATE\t\tUNIQUE  NULL   \tFILTERED   INDEX UX_Example ON Example(ID)"},
+			name: "CREATE		UNIQUE  NULL_FILTERED   INDEX",
+			args: args{"CREATE\t\tUNIQUE  NULL_FILTERED   INDEX UX_Example ON Example(ID)"},
 			wantDdl: SchemaDDL{
-				Statement:  "CREATE\t\tUNIQUE  NULL   \tFILTERED   INDEX UX_Example ON Example(ID)",
+				Statement:  "CREATE\t\tUNIQUE  NULL_FILTERED   INDEX UX_Example ON Example(ID)",
 				Filename:   "ux_example.sql",
 				ObjectType: "index",
 			},

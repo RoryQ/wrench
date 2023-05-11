@@ -55,7 +55,7 @@ const (
 
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
-	indexOptions              = `unique\s+|null\s+filtered\s+|unique\s+null\s+filtered\s+`
+	indexOptions              = `unique\s+|null_filtered\s+|unique\s+null_filtered\s+`
 	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index))\s+(?P<ObjectName>\w+).+`)
 )
 

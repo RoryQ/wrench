@@ -372,7 +372,7 @@ func promptDescription() string {
 	if len(clean) == 1 && clean[0] == '.' { // When Enter is only pressed to skip
 		return ""
 	}
-	return clean
+	return strings.ReplaceAll(clean, ".", "-") // Dot should separate .up.sql or .sql only
 }
 
 func createMigrationFile(dir string, name string, digits int) (string, error) {

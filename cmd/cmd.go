@@ -23,8 +23,9 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/roryq/wrench/pkg/spanner"
 	"github.com/spf13/cobra"
+
+	"github.com/roryq/wrench/pkg/spanner"
 )
 
 const (
@@ -42,6 +43,7 @@ const (
 	flagDDLFile                 = "ddl"
 	flagDMLFile                 = "dml"
 	flagPartitioned             = "partitioned"
+	flagSpannerEmulatorImage    = "spanner-emulator-image"
 	defaultSchemaFileName       = "schema.sql"
 	defaultStaticDataTablesFile = "{wrench.json|static_data_tables.txt}"
 )

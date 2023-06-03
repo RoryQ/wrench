@@ -70,10 +70,12 @@ func init() {
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(loadCmd)
 	rootCmd.AddCommand(loadDiscreteCmd)
+	rootCmd.AddCommand(schemaCmd)
 	rootCmd.AddCommand(applyCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(truncateCmd)
 
+	// global flags
 	rootCmd.PersistentFlags().StringVar(&project, flagNameProject, spannerProjectID(), "GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)")
 	rootCmd.PersistentFlags().StringVar(&instance, flagNameInstance, spannerInstanceID(), "Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)")
 	rootCmd.PersistentFlags().StringVar(&database, flagNameDatabase, spannerDatabaseID(), "Cloud Spanner database name (optional. if not set, will use $SPANNER_DATABASE_ID value)")

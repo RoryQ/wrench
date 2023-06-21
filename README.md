@@ -65,6 +65,7 @@ Available Commands:
   reset         Equivalent to drop and then create
   load          Load schema from server to file
   load-discrete Load schema from server to discrete files per object
+  schema        Runs the migrations against a dockerised spanner emulator, then loads the schema and static data to disk. (Requires docker)
   apply         Apply DDL file to database
   migrate       Migrate database
   truncate      Truncate all tables without deleting a database

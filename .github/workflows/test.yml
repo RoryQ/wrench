@@ -9,17 +9,22 @@ name: Tests with spanner emulator
 jobs:
   tests:
     runs-on: ubuntu-latest
-    container: node:10.18-jessie
     services:
       spanner:
         env:
           SPANNER_INSTANCE_ID: ${{env.SPANNER_INSTANCE_ID}}
           SPANNER_PROJECT_ID: ${{env.SPANNER_PROJECT_ID}}
         image: roryq/spanner-emulator:1.4.0
+        ports:
+          - 9010:9010
+      dind:
+        image: docker:23.0-rc-dind-rootless
+        ports:
+          - 2375:2375
     env:
       SPANNER_INSTANCE_ID: inst
       SPANNER_PROJECT_ID: proj
-      SPANNER_EMULATOR_HOST: spanner:9010
+      SPANNER_EMULATOR_HOST: localhost:9010
     steps:
       - name: Install Go
         uses: actions/setup-go@v2

@@ -36,7 +36,7 @@ ___
 
 ## Installation
 
-With go 1.18 or higher:
+With go 1.21 or higher:
 
 ```shell
 go install github.com/roryq/wrench@latest

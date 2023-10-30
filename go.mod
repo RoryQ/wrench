@@ -3,6 +3,7 @@ module github.com/roryq/wrench
 require (
 	cloud.google.com/go v0.110.9
 	cloud.google.com/go/spanner v1.51.0
+	github.com/carlmjohnson/versioninfo v0.22.5
 	github.com/google/go-cmp v0.6.0
 	github.com/google/uuid v1.3.1
 	github.com/kennygrant/sanitize v1.2.4
@@ -23,7 +24,6 @@ require (
 	github.com/Azure/go-ansiterm v0.0.0-20230124172434-306776ec8161 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/Nvveen/Gotty v0.0.0-20120604004816-cd527374f1e5 // indirect
-	github.com/carlmjohnson/versioninfo v0.22.5 // indirect
 	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/census-instrumentation/opencensus-proto v0.4.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect

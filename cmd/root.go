@@ -24,11 +24,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/spf13/pflag"
-
+	"github.com/carlmjohnson/versioninfo"
 	"github.com/google/uuid"
-
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -85,7 +84,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&staticDataTablesFile, flagStaticDataTablesFile, "", "File containing list of static data tables to track (optional)")
 	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, getLockIdentifier(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
-	rootCmd.Version = Version
+
+	rootCmd.Version = versioninfo.Version
 	rootCmd.SetVersionTemplate(versionTemplate)
 }
 

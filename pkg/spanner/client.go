@@ -565,8 +565,16 @@ func (i MigrationsOutput) String() string {
 		return ""
 	}
 
+	var filenames []string
+	for filename := range i {
+		filenames = append(filenames, filename)
+	}
+
+	sort.StringSlice(filenames).Sort()
+
 	output := "Migration Information:"
-	for filename, migrationInfo := range i {
+	for _, filename := range filenames {
+		migrationInfo := i[filename]
 		output = fmt.Sprintf("%s\n%s - rows affected: %d", output, filename, migrationInfo.RowsAffected)
 	}
 

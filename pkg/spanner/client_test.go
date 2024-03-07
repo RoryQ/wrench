@@ -803,19 +803,19 @@ func Test_MigrationInfoString(t *testing.T) {
 			exptectedOutput: "Migration Information:\ni-deleted-everything.sql - rows affected: 2000\n",
 		},
 		{
-			testName: "many result",
+			testName: "many results",
 			migrationInfo: MigrationsOutput{
-				"i-am-a-cool-update.sql": migrationInfo{
+				"0001-i-am-a-cool-update.sql": migrationInfo{
 					RowsAffected: 20,
 				},
-				"not-as-cool-as-me.sql": migrationInfo{
+				"0002-not-as-cool-as-me.sql": migrationInfo{
 					RowsAffected: 25,
 				},
-				"i-deleted-everything.sql": migrationInfo{
+				"0003-i-deleted-everything.sql": migrationInfo{
 					RowsAffected: 2000,
 				},
 			},
-			exptectedOutput: "Migration Information:\ni-am-a-cool-update.sql - rows affected: 20\nnot-as-cool-as-me.sql - rows affected: 25\ni-deleted-everything.sql - rows affected: 2000\n",
+			exptectedOutput: "Migration Information:\n0001-i-am-a-cool-update.sql - rows affected: 20\n0002-not-as-cool-as-me.sql - rows affected: 25\n0003-i-deleted-everything.sql - rows affected: 2000\n",
 		},
 	}
 

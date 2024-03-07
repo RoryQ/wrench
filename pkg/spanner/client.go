@@ -633,11 +633,16 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 				}
 			}
 		case statementKindDML:
-			if _, err := c.ApplyDML(ctx, m.Statements); err != nil {
+			rowsAffected, err := c.ApplyDML(ctx, m.Statements)
+			if err != nil {
 				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
 				}
+			}
+
+			migrationsOutput[m.FileName] = migrationInfo{
+				RowsAffected: rowsAffected,
 			}
 		case statementKindPartitionedDML:
 			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements)

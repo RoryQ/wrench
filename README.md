@@ -91,11 +91,12 @@ Flags:
       --directory string                 Directory that schema file placed (required)
   -h, --help                             help for wrench
       --instance string                  Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)
-      --lock-identifier string           Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated) (default "58a4394a-19f9-4dbf-880d-20b6cf169d46")
+      --lock-identifier string           Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated) (default "e00245e9-2bb5-4409-98a5-795939ce491e")
       --project string                   GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)
       --schema-file string               Name of schema file (optional. if not set, will use default 'schema.sql' file name)
       --sequence-interval uint16         Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1) (default 1)
       --static-data-tables-file string   File containing list of static data tables to track (optional)
+      --verbose                          Used to indicate whether to output Migration information during a migration
   -v, --version                          version for wrench
 
 Use "wrench [command] --help" for more information about a command.

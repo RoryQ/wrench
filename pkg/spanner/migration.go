@@ -70,6 +70,9 @@ type (
 		// Name is the name of the migration
 		Name string
 
+		// FileName is the name of the source file for the migration
+		FileName string
+
 		// Statements is the migration statements
 		Statements []string
 
@@ -138,6 +141,7 @@ func LoadMigrations(dir string, toSkipSlice []uint) (Migrations, error) {
 		migrations = append(migrations, &Migration{
 			Version:    uint(version),
 			Name:       matches[2],
+			FileName:   f.Name(),
 			Statements: statements,
 			kind:       kind,
 		})

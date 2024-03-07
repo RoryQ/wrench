@@ -570,7 +570,7 @@ func (i MigrationsOutput) String() string {
 		output = fmt.Sprintf("%s\n%s - rows affected: %d", output, filename, migrationInfo.RowsAffected)
 	}
 
-	return output
+	return fmt.Sprintf("%s\n", output)
 }
 
 func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) (MigrationsOutput, error) {

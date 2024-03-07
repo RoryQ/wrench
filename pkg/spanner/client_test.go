@@ -800,7 +800,7 @@ func Test_MigrationInfoString(t *testing.T) {
 					RowsAffected: 2000,
 				},
 			},
-			exptectedOutput: "Migration Information:\ni-deleted-everything.sql - rows affected: 2000",
+			exptectedOutput: "Migration Information:\ni-deleted-everything.sql - rows affected: 2000\n",
 		},
 		{
 			testName: "many result",
@@ -815,7 +815,7 @@ func Test_MigrationInfoString(t *testing.T) {
 					RowsAffected: 2000,
 				},
 			},
-			exptectedOutput: "Migration Information:\ni-am-a-cool-update.sql - rows affected: 20\nnot-as-cool-as-me.sql - rows affected: 25\ni-deleted-everything.sql - rows affected: 2000",
+			exptectedOutput: "Migration Information:\ni-am-a-cool-update.sql - rows affected: 20\nnot-as-cool-as-me.sql - rows affected: 25\ni-deleted-everything.sql - rows affected: 2000\n",
 		},
 	}
 

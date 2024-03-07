@@ -446,18 +446,23 @@ func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string) (
 	return numAffectedRows, nil
 }
 
-func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) error {
+func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) (MigrationsOutput, error) {
 	err := c.backfillMigrations(ctx, migrations, tableName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = c.ExecuteMigrations(ctx, migrations, limit, tableName)
+	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return c.markUpgradeComplete(ctx)
+	err = c.markUpgradeComplete(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return migrationsOutput, nil
 }
 
 func (c *Client) backfillMigrations(ctx context.Context, migrations Migrations, tableName string) error {
@@ -549,14 +554,33 @@ func (c *Client) GetMigrationHistory(ctx context.Context, versionTableName strin
 	return history, nil
 }
 
-func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) error {
+type MigrationsOutput map[string]migrationInfo
+
+type migrationInfo struct {
+	RowsAffected int64
+}
+
+func (i MigrationsOutput) String() string {
+	if len(i) == 0 {
+		return ""
+	}
+
+	output := "Migration Information:"
+	for filename, migrationInfo := range i {
+		output = fmt.Sprintf("%s\n%s - rows affected: %d", output, filename, migrationInfo.RowsAffected)
+	}
+
+	return output
+}
+
+func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) (MigrationsOutput, error) {
 	sort.Sort(migrations)
 
 	version, dirty, err := c.GetSchemaMigrationVersion(ctx, tableName)
 	if err != nil {
 		var se *Error
 		if !errors.As(err, &se) || se.Code != ErrorCodeNoMigration {
-			return &Error{
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
 			}
@@ -564,15 +588,15 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 	}
 
 	if dirty {
-		return &Error{
+		return nil, &Error{
 			Code: ErrorCodeMigrationVersionDirty,
-			err:  fmt.Errorf("Database version: %d is dirty, please fix it.", version),
+			err:  fmt.Errorf("database version: %d is dirty, please fix it.", version),
 		}
 	}
 
 	history, err := c.GetMigrationHistory(ctx, tableName)
 	if err != nil {
-		return &Error{
+		return nil, &Error{
 			Code: ErrorCodeExecuteMigrations,
 			err:  err,
 		}
@@ -582,6 +606,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		applied[history[i].Version] = true
 	}
 
+	var migrationsOutput MigrationsOutput = make(MigrationsOutput)
 	var count int
 	for _, m := range migrations {
 		if limit == 0 {
@@ -593,7 +618,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		}
 
 		if err := c.setSchemaMigrationVersion(ctx, m.Version, true, tableName); err != nil {
-			return &Error{
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
 			}
@@ -602,27 +627,32 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		switch m.kind {
 		case statementKindDDL:
 			if err := c.ApplyDDL(ctx, m.Statements); err != nil {
-				return &Error{
+				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
 				}
 			}
 		case statementKindDML:
 			if _, err := c.ApplyDML(ctx, m.Statements); err != nil {
-				return &Error{
+				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
 				}
 			}
 		case statementKindPartitionedDML:
-			if _, err := c.ApplyPartitionedDML(ctx, m.Statements); err != nil {
-				return &Error{
+			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements)
+			if err != nil {
+				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
 				}
 			}
+
+			migrationsOutput[m.FileName] = migrationInfo{
+				RowsAffected: rowsAffected,
+			}
 		default:
-			return &Error{
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  fmt.Errorf("Unknown query type, version: %d", m.Version),
 			}
@@ -635,7 +665,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		}
 
 		if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
-			return &Error{
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
 			}
@@ -651,7 +681,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		fmt.Println("no change")
 	}
 
-	return nil
+	return migrationsOutput, nil
 }
 
 func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string) (uint, bool, error) {

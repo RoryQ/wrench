@@ -46,6 +46,7 @@ var (
 	staticDataTablesFile string
 	lockIdentifier       string
 	sequenceInterval     uint16
+	verbose              bool
 )
 
 var rootCmd = &cobra.Command{
@@ -84,6 +85,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&staticDataTablesFile, flagStaticDataTablesFile, "", "File containing list of static data tables to track (optional)")
 	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, getLockIdentifier(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
+	rootCmd.PersistentFlags().BoolVar(&verbose, flagVerbose, false, "Used to indicate whether to output Migration information during a migration")
 
 	rootCmd.Version = versioninfo.Version
 	rootCmd.SetVersionTemplate(versionTemplate)

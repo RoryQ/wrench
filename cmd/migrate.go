@@ -211,17 +211,30 @@ func migrateUp(c *cobra.Command, args []string) error {
 			err: err,
 		}
 	}
+
+	var migrationsOutput spanner.MigrationsOutput
 	switch status {
 	case spanner.ExistingMigrationsUpgradeStarted:
-		return client.UpgradeExecuteMigrations(ctx, migrations, limit, migrationTableName)
+		migrationsOutput, err = client.UpgradeExecuteMigrations(ctx, migrations, limit, migrationTableName)
+		if err != nil {
+			return err
+		}
 	case spanner.ExistingMigrationsUpgradeCompleted:
-		return client.ExecuteMigrations(ctx, migrations, limit, migrationTableName)
+		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, limit, migrationTableName)
+		if err != nil {
+			return err
+		}
 	default:
 		return &Error{
 			cmd: c,
 			err: errors.New("migration in undetermined state"),
 		}
 	}
+	if verbose {
+		fmt.Print(migrationsOutput.String())
+	}
+
+	return nil
 }
 
 func migrateVersion(c *cobra.Command, args []string) error {

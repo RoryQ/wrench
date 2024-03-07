@@ -210,9 +210,14 @@ func TestExecuteMigrations(t *testing.T) {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
 
+	var migrationsOutput MigrationsOutput
 	// only apply 000002.sql by specifying limit 1.
-	if err := client.ExecuteMigrations(ctx, migrations, 1, migrationTable); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
+	}
+
+	if len(migrationsOutput) != 0 {
+		t.Errorf("want zero length migrationInfo, but got %v", len(migrationsOutput))
 	}
 
 	// ensure that only 000002.sql has been applied.
@@ -220,8 +225,12 @@ func TestExecuteMigrations(t *testing.T) {
 	ensureMigrationVersionRecord(t, ctx, client, 2, false)
 	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
 
-	if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
+	}
+
+	if want, got := int64(1), migrationsOutput["000003.sql"].RowsAffected; want != got {
+		t.Errorf("want %d, but got %d", want, got)
 	}
 
 	// ensure that 000003.sql and 000004.sql have been applied.
@@ -499,7 +508,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -517,7 +526,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err = client.GetMigrationHistory(ctx, migrationTable)
@@ -541,7 +550,7 @@ func TestUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}
-		if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+		if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 		expected, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -559,7 +568,7 @@ func TestUpgrade(t *testing.T) {
 		if client.tableExists(ctx, upgradeIndicator) == false {
 			t.Error("upgrade indicator should exist")
 		}
-		if err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+		if _, err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 
@@ -769,11 +778,64 @@ func TestClient_RepairMigration(t *testing.T) {
 	}
 }
 
+func Test_MigrationInfoString(t *testing.T) {
+	tests := []struct {
+		testName        string
+		migrationInfo   MigrationsOutput
+		exptectedOutput string
+	}{
+		{
+			testName:        "no results",
+			migrationInfo:   MigrationsOutput{},
+			exptectedOutput: "",
+		},
+		{
+			testName:        "unitiated results - panic resiliant",
+			exptectedOutput: "",
+		},
+		{
+			testName: "one result",
+			migrationInfo: MigrationsOutput{
+				"i-deleted-everything.sql": migrationInfo{
+					RowsAffected: 2000,
+				},
+			},
+			exptectedOutput: "Migration Information:\ni-deleted-everything.sql - rows affected: 2000\n",
+		},
+		{
+			testName: "many results",
+			migrationInfo: MigrationsOutput{
+				"0001-i-am-a-cool-update.sql": migrationInfo{
+					RowsAffected: 20,
+				},
+				"0002-not-as-cool-as-me.sql": migrationInfo{
+					RowsAffected: 25,
+				},
+				"0003-i-deleted-everything.sql": migrationInfo{
+					RowsAffected: 2000,
+				},
+			},
+			exptectedOutput: "Migration Information:\n0001-i-am-a-cool-update.sql - rows affected: 20\n0002-not-as-cool-as-me.sql - rows affected: 25\n0003-i-deleted-everything.sql - rows affected: 2000\n",
+		},
+	}
+
+	for _, test := range tests {
+		output := test.migrationInfo.String()
+		assert.Equal(t, test.exptectedOutput, output)
+	}
+}
+
 func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string, toSkip ...uint) error {
 	t.Helper()
 	migrations, err := LoadMigrations(dir, toSkip)
 	if err != nil {
 		return err
 	}
-	return client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable)
+
+	_, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -40,6 +40,7 @@ const (
 	flagNameSchemaFile          = "schema-file"
 	flagLockIdentifier          = "lock-identifier"
 	flagSequenceInterval        = "sequence-interval"
+	flagVerbose                 = "verbose"
 	flagDDLFile                 = "ddl"
 	flagDMLFile                 = "dml"
 	flagPartitioned             = "partitioned"

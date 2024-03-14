@@ -19,13 +19,17 @@
 
 package spanner
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type Config struct {
 	Project         string
 	Instance        string
 	Database        string
 	CredentialsFile string
+	StmtTimeout     time.Duration
 }
 
 func (c *Config) URL() string {

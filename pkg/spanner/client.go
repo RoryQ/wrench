@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/googleapis/gax-go/v2"
 	"github.com/roryq/wrench/pkg/spannerz"
 
 	"google.golang.org/grpc/codes"
@@ -36,6 +37,7 @@ import (
 
 	"cloud.google.com/go/spanner"
 	admin "cloud.google.com/go/spanner/admin/database/apiv1"
+	vkit "cloud.google.com/go/spanner/apiv1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	databasepb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
@@ -84,7 +86,15 @@ func NewClient(ctx context.Context, config *Config) (*Client, error) {
 		opts = append(opts, option.WithCredentialsFile(config.CredentialsFile))
 	}
 
-	spannerClient, err := spanner.NewClient(ctx, config.URL(), opts...)
+	callOptions := &vkit.CallOptions{}
+	if config.StmtTimeout > 0 {
+		callOptions.ExecuteSql = []gax.CallOption{gax.WithTimeout(config.StmtTimeout)}
+	}
+	spannerClient, err := spanner.NewClientWithConfig(ctx, config.URL(), spanner.ClientConfig{
+		SessionPoolConfig:    spanner.DefaultSessionPoolConfig,
+		DisableRouteToLeader: false,
+		CallOptions:          callOptions,
+	}, opts...)
 	if err != nil {
 		return nil, &Error{
 			Code: ErrorCodeCreateClient,

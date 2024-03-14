@@ -40,6 +40,7 @@ const (
 	flagNameSchemaFile          = "schema-file"
 	flagLockIdentifier          = "lock-identifier"
 	flagSequenceInterval        = "sequence-interval"
+	flagStmtTimeout             = "stmt-timeout"
 	flagVerbose                 = "verbose"
 	flagDDLFile                 = "ddl"
 	flagDMLFile                 = "dml"
@@ -55,6 +56,7 @@ func newSpannerClient(ctx context.Context, c *cobra.Command) (*spanner.Client, e
 		Instance:        c.Flag(flagNameInstance).Value.String(),
 		Database:        c.Flag(flagNameDatabase).Value.String(),
 		CredentialsFile: c.Flag(flagCredentialsFile).Value.String(),
+		StmtTimeout:     stmtTimeout,
 	}
 
 	client, err := spanner.NewClient(ctx, config)

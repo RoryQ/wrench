@@ -88,7 +88,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&lockIdentifier, flagLockIdentifier, getLockIdentifier(), "Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated)")
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
 	rootCmd.PersistentFlags().BoolVar(&verbose, flagVerbose, false, "Used to indicate whether to output Migration information during a migration")
-	rootCmd.PersistentFlags().DurationVar(&stmtTimeout, flagStmtTimeout, getStmtTimeout(), "Set a non-default timeout for statement execution)")
+	rootCmd.PersistentFlags().DurationVar(&stmtTimeout, flagStmtTimeout, getStmtTimeout(), "Set a non-default timeout for statement execution")
 
 	rootCmd.Version = versioninfo.Version
 	rootCmd.SetVersionTemplate(versionTemplate)

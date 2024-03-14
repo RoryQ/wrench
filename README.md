@@ -96,6 +96,7 @@ Flags:
       --schema-file string               Name of schema file (optional. if not set, will use default 'schema.sql' file name)
       --sequence-interval uint16         Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1) (default 1)
       --static-data-tables-file string   File containing list of static data tables to track (optional)
+      --stmt-timeout duration            Set a non-default timeout for statement execution
       --verbose                          Used to indicate whether to output Migration information during a migration
   -v, --version                          version for wrench
 

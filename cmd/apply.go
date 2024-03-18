@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -78,7 +79,7 @@ func apply(c *cobra.Command, _ []string) error {
 	}
 
 	// apply dml
-	dml, err := ioutil.ReadFile(dmlFile)
+	dml, err := os.ReadFile(dmlFile)
 	if err != nil {
 		return &Error{
 			err: err,
@@ -86,7 +87,8 @@ func apply(c *cobra.Command, _ []string) error {
 		}
 	}
 
-	numAffectedRows, err := client.ApplyDMLFile(ctx, dml, partitioned)
+	concurrency := int(partitionedDMLConcurrency)
+	numAffectedRows, err := client.ApplyDMLFile(ctx, dml, partitioned, concurrency)
 	if err != nil {
 		return &Error{
 			err: err,

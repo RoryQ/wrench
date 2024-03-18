@@ -20,20 +20,22 @@
 package spanner
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/googleapis/gax-go/v2"
+	"github.com/sourcegraph/conc/pool"
+
 	"github.com/roryq/wrench/pkg/spannerz"
 
 	"google.golang.org/grpc/codes"
-
-	"github.com/roryq/wrench/pkg/spanner/dataloader"
 
 	"cloud.google.com/go/spanner"
 	admin "cloud.google.com/go/spanner/admin/database/apiv1"
@@ -41,6 +43,8 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	databasepb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
+
+	"github.com/roryq/wrench/pkg/spanner/dataloader"
 )
 
 const (
@@ -403,11 +407,11 @@ func (c *Client) ApplyDDL(ctx context.Context, statements []string) error {
 	return nil
 }
 
-func (c *Client) ApplyDMLFile(ctx context.Context, ddl []byte, partitioned bool) (int64, error) {
-	statements := toStatements(ddl)
+func (c *Client) ApplyDMLFile(ctx context.Context, dml []byte, partitioned bool, concurrency int) (int64, error) {
+	statements := toStatements(dml)
 
 	if partitioned {
-		return c.ApplyPartitionedDML(ctx, statements)
+		return c.ApplyPartitionedDML(ctx, statements, concurrency)
 	}
 	return c.ApplyDML(ctx, statements)
 }
@@ -436,24 +440,34 @@ func (c *Client) ApplyDML(ctx context.Context, statements []string) (int64, erro
 	return numAffectedRows, nil
 }
 
-func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string) (int64, error) {
-	numAffectedRows := int64(0)
+func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string, concurrency int) (int64, error) {
+	numAffectedRows := atomic.Int64{}
 
+	concurrency = cmp.Or(concurrency, 1)
+	p := pool.New().WithMaxGoroutines(concurrency).WithErrors()
 	for _, s := range statements {
-		num, err := c.spannerClient.PartitionedUpdate(ctx, spanner.Statement{
-			SQL: s,
-		})
-		if err != nil {
-			return numAffectedRows, &Error{
-				Code: ErrorCodeUpdatePartitionedDML,
-				err:  err,
+		p.Go(func() error {
+			num, err := c.spannerClient.PartitionedUpdate(ctx, spanner.Statement{
+				SQL: s,
+			})
+			if err != nil {
+				return err
 			}
-		}
 
-		numAffectedRows += num
+			numAffectedRows.Add(num)
+			return nil
+		})
 	}
 
-	return numAffectedRows, nil
+	err := p.Wait()
+	if err != nil {
+		return numAffectedRows.Load(), &Error{
+			Code: ErrorCodeUpdatePartitionedDML,
+			err:  err,
+		}
+	}
+
+	return numAffectedRows.Load(), nil
 }
 
 func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) (MigrationsOutput, error) {
@@ -462,7 +476,7 @@ func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrat
 		return nil, err
 	}
 
-	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName)
+	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +605,7 @@ func (i MigrationsOutput) String() string {
 	return fmt.Sprintf("%s\n", output)
 }
 
-func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) (MigrationsOutput, error) {
+func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int) (MigrationsOutput, error) {
 	sort.Sort(migrations)
 
 	version, dirty, err := c.GetSchemaMigrationVersion(ctx, tableName)
@@ -663,7 +677,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 				RowsAffected: rowsAffected,
 			}
 		case statementKindPartitionedDML:
-			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements)
+			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements, partitionedConcurrency)
 			if err != nil {
 				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,

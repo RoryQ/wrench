@@ -1,6 +1,6 @@
 .PHONY: test
 test: _spanner-up
-	go test -race -count=1 ./...
+	go test -race -v -count=1 ./...
 	-@make _spanner-down
 
 

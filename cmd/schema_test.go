@@ -16,7 +16,7 @@ func Test_schema(t *testing.T) {
 
 	// execute schema command
 	cmd := schemaCmd
-	cmd.Flag(flagNameDirectory).Value.Set("testdata/schema_test")
+	_ = cmd.Flag(flagNameDirectory).Value.Set("testdata/schema_test")
 	err := schema(cmd, []string{})
 	assert.NoError(t, err)
 

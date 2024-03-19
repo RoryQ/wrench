@@ -24,7 +24,7 @@ func (s *OnShutdown) Do(f func()) {
 	s.init.Do(func() {
 		go func() {
 			sigc := make(chan os.Signal, 1)
-			signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGSTOP)
+			signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 			<-sigc
 			s.Exit()
 			if s.OsExit {

@@ -48,9 +48,9 @@ func schema(c *cobra.Command, args []string) error {
 		return err
 	}
 
-	c.Flag(flagNameProject).Value.Set("schema")
-	c.Flag(flagNameInstance).Value.Set("schema")
-	c.Flag(flagNameDatabase).Value.Set("schema")
+	_ = c.Flag(flagNameProject).Value.Set("schema")
+	_ = c.Flag(flagNameInstance).Value.Set("schema")
+	_ = c.Flag(flagNameDatabase).Value.Set("schema")
 
 	// run migrations
 	if err := migrateUp(c, args); err != nil {

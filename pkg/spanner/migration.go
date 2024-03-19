@@ -23,7 +23,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -97,7 +97,7 @@ func (ms Migrations) Less(i, j int) bool {
 }
 
 func LoadMigrations(dir string, toSkipSlice []uint) (Migrations, error) {
-	files, err := ioutil.ReadDir(dir)
+	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func LoadMigrations(dir string, toSkipSlice []uint) (Migrations, error) {
 			continue
 		}
 
-		file, err := ioutil.ReadFile(filepath.Join(dir, f.Name()))
+		file, err := os.ReadFile(filepath.Join(dir, f.Name()))
 		if err != nil {
 			continue
 		}

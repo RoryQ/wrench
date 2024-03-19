@@ -24,7 +24,7 @@ import (
 
 	"cloud.google.com/go/spanner"
 
-	sppb "google.golang.org/genproto/googleapis/spanner/v1"
+	sppb "cloud.google.com/go/spanner/apiv1/spannerpb"
 )
 
 type Columns struct {
@@ -245,7 +245,7 @@ func DecodeColumn(column spanner.GenericColumnValue, wQuotes bool) (string, erro
 		}
 		return withQuotes(nullDateToString(v), wQuotes), nil
 	default:
-		return fmt.Sprintf("%s", column.Value), nil
+		return column.Value.String(), nil
 	}
 }
 
@@ -308,7 +308,7 @@ func nullStringToString(v spanner.NullString) string {
 
 func nullTimeToString(v spanner.NullTime) string {
 	if v.Valid {
-		return fmt.Sprintf("%s", v.Time.Format(time.RFC3339Nano))
+		return v.Time.Format(time.RFC3339Nano)
 	} else {
 		return "NULL"
 	}

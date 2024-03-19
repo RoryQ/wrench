@@ -96,7 +96,7 @@ func (ms Migrations) Less(i, j int) bool {
 	return ms[i].Version < ms[j].Version
 }
 
-func LoadMigrations(dir string, toSkipSlice []uint) (Migrations, error) {
+func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (Migrations, error) {
 	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -133,7 +133,7 @@ func LoadMigrations(dir string, toSkipSlice []uint) (Migrations, error) {
 		}
 
 		statements := toStatements(file)
-		kind, err := inspectStatementsKind(statements)
+		kind, err := inspectStatementsKind(statements, detectPartitionedDML)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +184,7 @@ func toStatements(file []byte) []string {
 	return statements
 }
 
-func inspectStatementsKind(statements []string) (statementKind, error) {
+func inspectStatementsKind(statements []string, detectPartitionedDML bool) (statementKind, error) {
 	kindMap := map[statementKind]uint64{
 		statementKindDDL:            0,
 		statementKindDML:            0,
@@ -199,20 +199,30 @@ func inspectStatementsKind(statements []string) (statementKind, error) {
 		return statementKindDDL, nil
 	}
 
-	if distinctKind(kindMap, statementKindDML) {
+	// skip further DML type inspection unless detectPartitionedDML is true
+	if !detectPartitionedDML && distinctKind(kindMap, statementKindDML, statementKindPartitionedDML) {
 		return statementKindDML, nil
 	}
 
-	if distinctKind(kindMap, statementKindPartitionedDML) {
+	if detectPartitionedDML && distinctKind(kindMap, statementKindDML) {
+		return statementKindDML, nil
+	}
+
+	if detectPartitionedDML && distinctKind(kindMap, statementKindPartitionedDML) {
 		return statementKindPartitionedDML, nil
 	}
 
 	return "", errors.New("Cannot specify DDL and DML in the same migration file")
 }
 
-func distinctKind(kindMap map[statementKind]uint64, kind statementKind) bool {
-	target := kindMap[kind]
+func distinctKind(kindMap map[statementKind]uint64, kinds ...statementKind) bool {
+	// sum the target statement kinds
+	var target uint64
+	for _, k := range kinds {
+		target = target + kindMap[k]
+	}
 
+	// sum all statement kinds
 	var total uint64
 	for k := range kindMap {
 		total = total + kindMap[k]

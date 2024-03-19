@@ -212,6 +212,8 @@ func migrateUp(c *cobra.Command, args []string) error {
 		}
 	}
 
+	concurrency := int(partitionedDMLConcurrency)
+
 	var migrationsOutput spanner.MigrationsOutput
 	switch status {
 	case spanner.ExistingMigrationsUpgradeStarted:
@@ -220,7 +222,7 @@ func migrateUp(c *cobra.Command, args []string) error {
 			return err
 		}
 	case spanner.ExistingMigrationsUpgradeCompleted:
-		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, limit, migrationTableName)
+		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, limit, migrationTableName, concurrency)
 		if err != nil {
 			return err
 		}

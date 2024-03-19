@@ -38,17 +38,18 @@ var (
 )
 
 var (
-	project              string
-	instance             string
-	database             string
-	directory            string
-	schemaFile           string
-	credentialsFile      string
-	staticDataTablesFile string
-	lockIdentifier       string
-	sequenceInterval     uint16
-	stmtTimeout          time.Duration
-	verbose              bool
+	project                   string
+	instance                  string
+	database                  string
+	directory                 string
+	schemaFile                string
+	credentialsFile           string
+	staticDataTablesFile      string
+	lockIdentifier            string
+	sequenceInterval          uint16
+	partitionedDMLConcurrency uint16
+	stmtTimeout               time.Duration
+	verbose                   bool
 )
 
 var rootCmd = &cobra.Command{
@@ -89,6 +90,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
 	rootCmd.PersistentFlags().BoolVar(&verbose, flagVerbose, false, "Used to indicate whether to output Migration information during a migration")
 	rootCmd.PersistentFlags().DurationVar(&stmtTimeout, flagStmtTimeout, getStmtTimeout(), "Set a non-default timeout for statement execution")
+	rootCmd.PersistentFlags().Uint16Var(&partitionedDMLConcurrency, flagPartitionedDMLConcurrency, getPartitionedDMLConcurrency(), "Set the concurrency for Partitioned-DML statements. (optional. if not set, will use $WRENCH_PARTITIONED_DML_CONCURRENCY or default to 1)")
 
 	rootCmd.Version = versioninfo.Version
 	rootCmd.SetVersionTemplate(versionTemplate)
@@ -136,4 +138,12 @@ func getStmtTimeout() time.Duration {
 		return 0
 	}
 	return i
+}
+
+func getPartitionedDMLConcurrency() uint16 {
+	i, err := strconv.Atoi(os.Getenv("WRENCH_PARTITIONED_DML_CONCURRENCY"))
+	if err != nil {
+		return 1
+	}
+	return uint16(i)
 }

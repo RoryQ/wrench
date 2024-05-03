@@ -42,6 +42,7 @@ const (
 	flagSequenceInterval        = "sequence-interval"
 	flagStmtTimeout             = "stmt-timeout"
 	flagDetectPartitionedDML    = "detect-partitioned-dml"
+	flagPartitionedDMLConcurrency= "partitioned-dml-concurrency"
 	flagVerbose                 = "verbose"
 	flagDDLFile                 = "ddl"
 	flagDMLFile                 = "dml"

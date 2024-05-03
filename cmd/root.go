@@ -50,6 +50,7 @@ var (
 	stmtTimeout          time.Duration
 	verbose              bool
 	detectPartitionedDML bool
+	partitionedDMLConcurrency uint16
 )
 
 var rootCmd = &cobra.Command{
@@ -91,6 +92,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&verbose, flagVerbose, false, "Used to indicate whether to output Migration information during a migration")
 	rootCmd.PersistentFlags().DurationVar(&stmtTimeout, flagStmtTimeout, getStmtTimeout(), "Set a non-default timeout for statement execution")
 	rootCmd.PersistentFlags().BoolVar(&detectPartitionedDML, flagDetectPartitionedDML, getDetectPartitionedDML(), "Automatically detect when a migration contains only Partitioned DML statements, and apply the statements in partition-level transactions via the PartitionedDML API. (optional. if not set, will use $WRENCH_DETECT_PARTITIONED_DML or default to false)")
+	rootCmd.PersistentFlags().Uint16Var(&partitionedDMLConcurrency, flagPartitionedDMLConcurrency, getPartitionedDMLConcurrency(), "Set the concurrency for Partitioned-DML statements. (optional. if not set, will use $WRENCH_PARTITIONED_DML_CONCURRENCY or default to 1)")
 
 	rootCmd.Version = versioninfo.Version
 	rootCmd.SetVersionTemplate(versionTemplate)
@@ -146,4 +148,12 @@ func getDetectPartitionedDML() bool {
 		return false
 	}
 	return b
+}
+
+func getPartitionedDMLConcurrency() uint16 {
+	i, err := strconv.Atoi(os.Getenv("WRENCH_PARTITIONED_DML_CONCURRENCY"))
+	if err != nil {
+		return 1
+	}
+	return uint16(i)
 }

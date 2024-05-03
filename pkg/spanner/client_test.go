@@ -135,15 +135,29 @@ func TestApplyDMLFile(t *testing.T) {
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 
-	tests := map[string]struct {
-		partitioned bool
+	tests := []struct {
+		name                   string
+		partitioned            bool
+		partitionedConcurrency int
 	}{
-		"normal DML":      {partitioned: false},
-		"partitioned DML": {partitioned: true},
+		{
+			name:        "normal DML",
+			partitioned: false,
+		},
+		{
+			name:                   "partitioned DML",
+			partitioned:            true,
+			partitionedConcurrency: 1,
+		},
+		{
+			name:                   "partitioned DML concurrently",
+			partitioned:            true,
+			partitionedConcurrency: 10,
+		},
 	}
 
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			key := "1"
 
 			_, err := client.spannerClient.Apply(
@@ -161,7 +175,7 @@ func TestApplyDMLFile(t *testing.T) {
 				t.Fatalf("failed to read dml file: %v", err)
 			}
 
-			n, err := client.ApplyDMLFile(ctx, dml, test.partitioned)
+			n, err := client.ApplyDMLFile(ctx, dml, tc.partitioned, tc.partitionedConcurrency)
 			if err != nil {
 				t.Fatalf("failed to apply dml file: %v", err)
 			}
@@ -211,7 +225,7 @@ func TestExecuteMigrations(t *testing.T) {
 
 	var migrationsOutput MigrationsOutput
 	// only apply 000002.sql by specifying limit 1.
-	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
@@ -224,7 +238,7 @@ func TestExecuteMigrations(t *testing.T) {
 	ensureMigrationVersionRecord(t, ctx, client, 2, false)
 	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
 
-	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
@@ -507,7 +521,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -525,7 +539,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err = client.GetMigrationHistory(ctx, migrationTable)
@@ -549,7 +563,7 @@ func TestUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}
-		if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+		if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 		expected, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -831,7 +845,7 @@ func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string,
 		return err
 	}
 
-	_, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable)
+	_, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1)
 	if err != nil {
 		return err
 	}

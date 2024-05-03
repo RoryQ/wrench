@@ -86,7 +86,8 @@ func apply(c *cobra.Command, _ []string) error {
 		}
 	}
 
-	numAffectedRows, err := client.ApplyDMLFile(ctx, dml, partitioned)
+	concurrency := int(partitionedDMLConcurrency)
+	numAffectedRows, err := client.ApplyDMLFile(ctx, dml, partitioned, concurrency)
 	if err != nil {
 		return &Error{
 			err: err,

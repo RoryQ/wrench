@@ -23,7 +23,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -74,7 +74,7 @@ func load(c *cobra.Command, args []string) error {
 		}
 	}
 
-	err = ioutil.WriteFile(schemaFilePath(c), ddl, 0664)
+	err = os.WriteFile(schemaFilePath(c), ddl, 0664)
 	if err != nil {
 		return &Error{
 			err: err,
@@ -178,8 +178,14 @@ func openFile(p string) (*os.File, error, func()) {
 
 func readJsonFile(filePath string) (staticDataConfig, error) {
 	f, err, done := openFile(filePath)
+	if err != nil {
+		return staticDataConfig{}, err
+	}
 	defer done()
-	bytes, err := ioutil.ReadAll(f)
+	bytes, err := io.ReadAll(f)
+	if err != nil {
+		return staticDataConfig{}, err
+	}
 	var d staticDataConfig
 	err = json.Unmarshal(bytes, &d)
 	return d, err
@@ -205,13 +211,16 @@ func writeDDL(ddl spanner.SchemaDDL, schemaDir string) error {
 	if err := mkdir(parent); err != nil {
 		return err
 	}
-	return ioutil.WriteFile(file, []byte(ddl.Statement), 0664)
+	return os.WriteFile(file, []byte(ddl.Statement), 0664)
 }
 
 func mkdir(parent string) error {
 	_, err := os.Stat(parent)
 	if os.IsNotExist(err) {
-		os.MkdirAll(parent, 0700)
+		err = os.MkdirAll(parent, 0700)
+		if err != nil {
+			return err
+		}
 	} else if err != nil {
 		return err
 	}
@@ -224,7 +233,7 @@ func writeData(data spanner.StaticData, schemaDir string) error {
 	if err := mkdir(parent); err != nil {
 		return err
 	}
-	return ioutil.WriteFile(file, []byte(strings.Join(data.Statements, "\n")), 0644)
+	return os.WriteFile(file, []byte(strings.Join(data.Statements, "\n")), 0644)
 }
 
 func schemaDirPath(c *cobra.Command) string {

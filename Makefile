@@ -3,7 +3,6 @@ test: _spanner-up
 	go test -race -v -count=1 ./...
 	-@make _spanner-down
 
-
 .PHONY: README.md
 README.md: export WRENCH_LOCK_IDENTIFIER=58a4394a-19f9-4dbf-880d-20b6cf169d46
 README.md: export SPANNER_PROJECT_ID=
@@ -11,8 +10,15 @@ README.md: export SPANNER_INSTANCE_ID=
 README.md:
 	go run tools/usage/main.go
 
+.PHONY: lint
+lint: tooldep.golangci-lint
+	golangci-lint run
 
-
+GOLANGCI_LINT_VERSION ?= 1.56.2
+.PHONY: tooldep.golangci-lint
+tooldep.golangci-lint:
+	-@[[ "$(shell golangci-lint version)" =~ "$(GOLANGCI_LINT_VERSION)" ]] || \
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION)
 
 .PHONY: _spanner-up
 _spanner-up:
@@ -23,7 +29,6 @@ _spanner-up:
 		--name spanner-tests \
 		roryq/spanner-emulator:latest >/dev/null 2>&1
 	@sleep 2
-
 
 .PHONY: _spanner-down
 _spanner-down:

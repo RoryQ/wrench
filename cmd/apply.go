@@ -23,7 +23,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -55,7 +54,7 @@ func apply(c *cobra.Command, _ []string) error {
 			return errors.New("Cannot specify DDL and DML at same time.")
 		}
 
-		ddl, err := ioutil.ReadFile(ddlFile)
+		ddl, err := os.ReadFile(ddlFile)
 		if err != nil {
 			return &Error{
 				err: err,

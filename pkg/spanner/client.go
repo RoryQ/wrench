@@ -39,10 +39,10 @@ import (
 
 	"cloud.google.com/go/spanner"
 	admin "cloud.google.com/go/spanner/admin/database/apiv1"
+	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
 	vkit "cloud.google.com/go/spanner/apiv1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
-	databasepb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 
 	"github.com/roryq/wrench/pkg/spanner/dataloader"
 )
@@ -798,7 +798,7 @@ func (c *Client) RepairMigration(ctx context.Context, tableName string) error {
 			return err
 		}
 
-		version, err := resetSchemaVersion(ctx, tx, tableNameHistory, err, tableName)
+		version, err := resetSchemaVersion(ctx, tx, tableNameHistory, tableName)
 		if err != nil {
 			return err
 		}
@@ -816,7 +816,7 @@ func (c *Client) RepairMigration(ctx context.Context, tableName string) error {
 	return nil
 }
 
-func resetSchemaVersion(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string, err error, tableName string) ([]*spanner.Mutation, error) {
+func resetSchemaVersion(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string, tableName string) ([]*spanner.Mutation, error) {
 	latestSQL := "select * from " + tableNameHistory + " where dirty = FALSE order by version limit 1"
 	latest, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, latestSQL)
 	if err != nil {
@@ -989,7 +989,10 @@ type MigrationLock struct {
 func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error {
 	if !c.tableExists(ctx, tableName) {
 		sql := fmt.Sprintf("CREATE TABLE %s(ID INT64, LockIdentifier STRING(200), Expiry TIMESTAMP) PRIMARY KEY(ID)", tableName)
-		c.ApplyDDL(ctx, []string{sql})
+		err := c.ApplyDDL(ctx, []string{sql})
+		if err != nil {
+			return err
+		}
 	}
 
 	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
@@ -1007,7 +1010,10 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 		}
 
 		lock := MigrationLock{}
-		row.ToStruct(&lock)
+		err = row.ToStruct(&lock)
+		if err != nil {
+			return err
+		}
 		fmt.Printf("clearing lock identifier [%s] expiry [%v]\n", lock.LockIdentifier, lock.Expiry)
 
 		// update
@@ -1023,7 +1029,7 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 
 func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier string) (lock MigrationLock, err error) {
 	lock = MigrationLock{
-		Release: func() { return },
+		Release: func() {},
 	}
 
 	// skip if lock table not setup
@@ -1065,7 +1071,10 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 	// fmt.Printf("%v %s %v\n", lock.Success, lock.LockIdentifier, lock.Expiry)
 
 	lock.Release = func() {
-		c.releaseMigrationLock(ctx, tableName, lockIdentifier)
+		err = c.releaseMigrationLock(ctx, tableName, lockIdentifier)
+		if err != nil {
+			fmt.Printf("failed to release migration lock: %v\n", err)
+		}
 	}
 
 	return lock, err

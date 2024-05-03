@@ -88,6 +88,7 @@ Available Commands:
 Flags:
       --credentials-file string              Specify Credentials File
       --database string                      Cloud Spanner database name (optional. if not set, will use $SPANNER_DATABASE_ID value)
+      --detect-partitioned-dml               Automatically detect when a migration contains only Partitioned DML statements, and apply the statements in partition-level transactions via the PartitionedDML API. (optional. if not set, will use $WRENCH_DETECT_PARTITIONED_DML or default to false)
       --directory string                     Directory that schema file placed (required)
   -h, --help                                 help for wrench
       --instance string                      Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)

@@ -22,7 +22,6 @@ package spanner
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"reflect"
 	"testing"
@@ -77,7 +76,7 @@ func TestLoadDDL(t *testing.T) {
 		t.Fatalf("failed to load ddl: %v", err)
 	}
 
-	wantDDL, err := ioutil.ReadFile("testdata/schema.sql")
+	wantDDL, err := os.ReadFile("testdata/schema.sql")
 	if err != nil {
 		t.Fatalf("failed to read ddl file: %v", err)
 	}
@@ -90,7 +89,7 @@ func TestLoadDDL(t *testing.T) {
 func TestApplyDDLFile(t *testing.T) {
 	ctx := context.Background()
 
-	ddl, err := ioutil.ReadFile("testdata/ddl.sql")
+	ddl, err := os.ReadFile("testdata/ddl.sql")
 	if err != nil {
 		t.Fatalf("failed to read ddl file: %v", err)
 	}
@@ -171,7 +170,7 @@ func TestApplyDMLFile(t *testing.T) {
 				t.Fatalf("failed to apply mutation: %v", err)
 			}
 
-			dml, err := ioutil.ReadFile("testdata/partitioned-dml.sql")
+			dml, err := os.ReadFile("testdata/dml.sql")
 			if err != nil {
 				t.Fatalf("failed to read dml file: %v", err)
 			}
@@ -219,7 +218,7 @@ func TestExecuteMigrations(t *testing.T) {
 		t.Fatalf("failed to apply mutation: %v", err)
 	}
 
-	migrations, err := LoadMigrations("testdata/migrations", nil)
+	migrations, err := LoadMigrations("testdata/migrations", nil, false)
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -518,7 +517,7 @@ func TestHotfixMigration(t *testing.T) {
 	defer done()
 
 	// apply changes from "trunk": [100, 200]
-	migrations, err := LoadMigrations("testdata/hotfix/a", nil)
+	migrations, err := LoadMigrations("testdata/hotfix/a", nil, false)
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -536,7 +535,7 @@ func TestHotfixMigration(t *testing.T) {
 	ensureMigrationHistoryRecord(t, ctx, client, 200, false)
 
 	// apply changes from "hotfix" branch: [101]
-	migrations, err = LoadMigrations("testdata/hotfix/b", nil)
+	migrations, err = LoadMigrations("testdata/hotfix/b", nil, false)
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -560,7 +559,7 @@ func TestUpgrade(t *testing.T) {
 		defer done()
 
 		// run migrations
-		migrations, err := LoadMigrations("testdata/migrations", nil)
+		migrations, err := LoadMigrations("testdata/migrations", nil, false)
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}
@@ -645,7 +644,7 @@ func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func())
 		t.Fatalf("failed to create spanner client: %v", err)
 	}
 
-	ddl, err := ioutil.ReadFile("testdata/schema.sql")
+	ddl, err := os.ReadFile("testdata/schema.sql")
 	if err != nil {
 		t.Fatalf("failed to read schema file: %v", err)
 	}
@@ -841,7 +840,7 @@ func Test_MigrationInfoString(t *testing.T) {
 
 func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string, toSkip ...uint) error {
 	t.Helper()
-	migrations, err := LoadMigrations(dir, toSkip)
+	migrations, err := LoadMigrations(dir, toSkip, false)
 	if err != nil {
 		return err
 	}

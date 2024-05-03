@@ -32,7 +32,7 @@ const (
 )
 
 func TestLoadMigrations(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), nil)
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestLoadMigrations(t *testing.T) {
 }
 
 func TestLoadMigrationsSkipVersion(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3})
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestLoadMigrationsSkipVersion(t *testing.T) {
 }
 
 func TestLoadMigrationsDuplicates(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "duplicate"), nil)
+	ms, err := LoadMigrations(filepath.Join("testdata", "duplicate"), nil, false)
 	if err == nil {
 		t.Errorf("error should not be nil")
 	}
@@ -132,57 +132,70 @@ func Test_getStatementKind(t *testing.T) {
 
 func Test_inspectStatementsKind(t *testing.T) {
 	tests := []struct {
-		name       string
-		statements []string
-		want       statementKind
-		wantErr    bool
+		name                 string
+		statements           []string
+		want                 statementKind
+		detectPartitionedDML bool
+		wantErr              bool
 	}{
 		{
-			"Only DDL returns DDL",
-			[]string{TestStmtDDL, TestStmtDDL},
-			statementKindDDL,
-			false,
+			name:       "Only DDL returns DDL",
+			statements: []string{TestStmtDDL, TestStmtDDL},
+			want:       statementKindDDL,
 		},
 		{
-			"Only PartitionedDML returns PartitionedDML",
-			[]string{TestStmtPartitionedDML, TestStmtPartitionedDML},
-			statementKindPartitionedDML,
-			false,
+			name:                 "Only PartitionedDML returns PartitionedDML",
+			statements:           []string{TestStmtPartitionedDML, TestStmtPartitionedDML},
+			want:                 statementKindPartitionedDML,
+			detectPartitionedDML: true,
 		},
 		{
-			"Only DML returns DML",
-			[]string{TestStmtDML, TestStmtDML},
-			statementKindDML,
-			false,
+			name:                 "No PartitionedDML detection returns DML",
+			statements:           []string{TestStmtPartitionedDML, TestStmtPartitionedDML},
+			want:                 statementKindDML,
+			detectPartitionedDML: false,
 		},
 		{
-			"DML and DDL returns error",
-			[]string{TestStmtDDL, TestStmtDML},
-			"",
-			true,
+			name:       "Only DML returns DML",
+			statements: []string{TestStmtDML, TestStmtDML},
+			want:       statementKindDML,
 		},
 		{
-			"DML and PartitionedDML returns error",
-			[]string{TestStmtDML, TestStmtPartitionedDML},
-			"",
-			true,
+			name:       "DML and DDL returns error",
+			statements: []string{TestStmtDDL, TestStmtDML},
+			wantErr:    true,
 		},
 		{
-			"DDL and PartitionedDML returns error",
-			[]string{TestStmtDDL, TestStmtPartitionedDML},
-			"",
-			true,
+			name:       "DML and undetected PartitionedDML returns DML",
+			statements: []string{TestStmtDML, TestStmtPartitionedDML},
+			want:       statementKindDML,
 		},
 		{
-			"no statements defaults to DDL as before",
-			[]string{},
-			statementKindDDL,
-			false,
+			name:                 "DML and detected PartitionedDML returns error",
+			statements:           []string{TestStmtDML, TestStmtPartitionedDML},
+			wantErr:              true,
+			detectPartitionedDML: true,
+		},
+		{
+			name:       "DDL and undetected PartitionedDML returns error",
+			statements: []string{TestStmtDDL, TestStmtPartitionedDML},
+			wantErr:    true,
+		},
+		{
+			name:                 "DDL and detected PartitionedDML returns error",
+			statements:           []string{TestStmtDDL, TestStmtPartitionedDML},
+			wantErr:              true,
+			detectPartitionedDML: true,
+		},
+		{
+			name:       "no statements defaults to DDL as before",
+			statements: []string{},
+			want:       statementKindDDL,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := inspectStatementsKind(tt.statements)
+			got, err := inspectStatementsKind(tt.statements, tt.detectPartitionedDML)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("inspectStatementsKind() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -229,29 +242,29 @@ CREATE TABLE Singers (
 		//			statement: `CREATE TABLE SchemaMigrations (
 		//  Version INT64 NOT NULL,
 		//  Dirty BOOL NOT NULL, -- THIS SHOULD BE REMOVED
-		//) PRIMARY KEY(Version)`,
+		// ) PRIMARY KEY(Version)`,
 		//			want: `CREATE TABLE SchemaMigrations (
 		//  Version INT64 NOT NULL,
 		//  Dirty BOOL NOT NULL,
-		//) PRIMARY KEY(Version)`,
+		// ) PRIMARY KEY(Version)`,
 		//		},
 		//		{
 		//			name: "Double quoted comment remains",
 		//			statement: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, "first name
-		//-- THIS STAYS IN DOUBLE QUOTES
-		//")`,
+		// -- THIS STAYS IN DOUBLE QUOTES
+		// ")`,
 		//			want: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, "first name
-		//-- THIS STAYS IN DOUBLE QUOTES
-		//")`,
+		// -- THIS STAYS IN DOUBLE QUOTES
+		// ")`,
 		//		},
 		//		{
 		//			name: "Single quoted comment remains",
 		//			statement: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, 'first name
-		//-- THIS STAYS IN DOUBLE QUOTES
-		//')`,
+		// -- THIS STAYS IN DOUBLE QUOTES
+		// ')`,
 		//			want: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, 'first name
-		//-- THIS STAYS IN DOUBLE QUOTES
-		//')`,
+		// -- THIS STAYS IN DOUBLE QUOTES
+		// ')`,
 		//		},
 	}
 	for _, tt := range tests {

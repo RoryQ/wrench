@@ -11,7 +11,7 @@ builds:
       - linux
 #      - windows
       - darwin
-    ldflags: -X github.com/roryq/wrench/cmd.Version=${{ .Version }}
+    ldflags: -X github.com/roryq/wrench/cmd.Version=v{{ .Version }}
     tags:
       - netgo
 archives:

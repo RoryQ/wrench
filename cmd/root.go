@@ -38,18 +38,18 @@ var (
 )
 
 var (
-	project              string
-	instance             string
-	database             string
-	directory            string
-	schemaFile           string
-	credentialsFile      string
-	staticDataTablesFile string
-	lockIdentifier       string
-	sequenceInterval     uint16
-	stmtTimeout          time.Duration
-	verbose              bool
-	detectPartitionedDML bool
+	project                   string
+	instance                  string
+	database                  string
+	directory                 string
+	schemaFile                string
+	credentialsFile           string
+	staticDataTablesFile      string
+	lockIdentifier            string
+	sequenceInterval          uint16
+	stmtTimeout               time.Duration
+	verbose                   bool
+	detectPartitionedDML      bool
 	partitionedDMLConcurrency uint16
 )
 
@@ -94,7 +94,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&detectPartitionedDML, flagDetectPartitionedDML, getDetectPartitionedDML(), "Automatically detect when a migration contains only Partitioned DML statements, and apply the statements in partition-level transactions via the PartitionedDML API. (optional. if not set, will use $WRENCH_DETECT_PARTITIONED_DML or default to false)")
 	rootCmd.PersistentFlags().Uint16Var(&partitionedDMLConcurrency, flagPartitionedDMLConcurrency, getPartitionedDMLConcurrency(), "Set the concurrency for Partitioned-DML statements. (optional. if not set, will use $WRENCH_PARTITIONED_DML_CONCURRENCY or default to 1)")
 
-	rootCmd.Version = versioninfo.Version
+	rootCmd.Version = Version
+	if versioninfo.Version != "unknown" && versioninfo.Version != "(devel)" {
+		rootCmd.Version = versioninfo.Version
+	}
 	rootCmd.SetVersionTemplate(versionTemplate)
 }
 

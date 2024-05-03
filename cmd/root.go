@@ -90,7 +90,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint16Var(&sequenceInterval, flagSequenceInterval, getSequenceInterval(), "Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1)")
 	rootCmd.PersistentFlags().BoolVar(&verbose, flagVerbose, false, "Used to indicate whether to output Migration information during a migration")
 	rootCmd.PersistentFlags().DurationVar(&stmtTimeout, flagStmtTimeout, getStmtTimeout(), "Set a non-default timeout for statement execution")
-	rootCmd.PersistentFlags().BoolVar(&detectPartitionedDML, flagDetectPartitionedDML, getDetectPartitionedDML(), "Automatically detect when a migration contains only Partitioned DML statements, and apply the statements in statement-level transactions via the PartitionedDML API. (optional. if not set, will use $WRENCH_DETECT_PARTITIONED_DML or default to false)")
+	rootCmd.PersistentFlags().BoolVar(&detectPartitionedDML, flagDetectPartitionedDML, getDetectPartitionedDML(), "Automatically detect when a migration contains only Partitioned DML statements, and apply the statements in partition-level transactions via the PartitionedDML API. (optional. if not set, will use $WRENCH_DETECT_PARTITIONED_DML or default to false)")
 
 	rootCmd.Version = versioninfo.Version
 	rootCmd.SetVersionTemplate(versionTemplate)

@@ -26,10 +26,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/kennygrant/sanitize"
 	"github.com/spf13/cobra"
@@ -236,36 +234,13 @@ func migrateHistory(c *cobra.Command, args []string) error {
 	}
 	defer client.Close()
 
-	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
-	defer lock.Release()
+	err = core.MigrateHistory(ctx, client, core.WithLockTable(migrationLockTable), core.WithLockIdentifier(lockIdentifier))
 	if err != nil {
 		return &Error{
 			cmd: c,
 			err: err,
 		}
 	}
-	if !lock.Success {
-		return &Error{
-			cmd: c,
-			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
-		}
-	}
-
-	history, err := client.GetMigrationHistory(ctx, migrationTableName)
-	if err != nil {
-		return err
-	}
-	sort.SliceStable(history, func(i, j int) bool {
-		return history[i].Created.Before(history[j].Created) // order by Created
-	})
-
-	writer := tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', tabwriter.AlignRight)
-	fmt.Fprintln(writer, "Version\tDirty\tCreated\tModified")
-	for i := range history {
-		h := history[i]
-		fmt.Fprintf(writer, "%d\t%v\t%v\t%v\n", h.Version, h.Dirty, h.Created, h.Modified)
-	}
-	writer.Flush()
 
 	return nil
 }
@@ -278,35 +253,18 @@ func migrateRepair(c *cobra.Command, args []string) error {
 		return err
 	}
 	defer client.Close()
-	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
-	defer lock.Release()
+
+	err = core.MigrateRepair(ctx, client,
+		core.WithLockTable(migrationLockTable),
+		core.WithLockIdentifier(lockIdentifier),
+		core.WithVersionTable(migrationTableName),
+	)
 	if err != nil {
 		return &Error{
 			cmd: c,
 			err: err,
 		}
 	}
-	if !lock.Success {
-		return &Error{
-			cmd: c,
-			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
-		}
-	}
-
-	if err = client.EnsureMigrationTable(ctx, migrationTableName); err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
-		}
-	}
-
-	if err := client.RepairMigration(ctx, migrationTableName); err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
-		}
-	}
-
 	return nil
 }
 
@@ -319,7 +277,7 @@ func migrateLocker(c *cobra.Command, args []string) error {
 	}
 	defer client.Close()
 
-	if err := client.SetupMigrationLock(ctx, migrationLockTable); err != nil {
+	if err := core.MigrateSetupLock(ctx, client, core.WithLockTable(migrationLockTable)); err != nil {
 		return &Error{
 			cmd: c,
 			err: err,

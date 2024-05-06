@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
+	"text/tabwriter"
 
 	"github.com/roryq/wrench/pkg/spanner"
 )
@@ -110,4 +112,82 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 	}
 
 	return nil
+}
+
+// MigrateHistory prints the migration history.
+// The relevant options are LockTableName, LockIdentifier and VersionTableName.
+func MigrateHistory(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
+	options := defaultMigrateOptions()
+	for _, optFn := range opts {
+		if err := optFn(options); err != nil {
+			return err
+		}
+	}
+	lock, err := client.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
+	defer lock.Release()
+	if err != nil {
+		return err
+	}
+	if !lock.Success {
+		return fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry)
+	}
+
+	history, err := client.GetMigrationHistory(ctx, options.VersionTableName)
+	if err != nil {
+		return err
+	}
+	sort.SliceStable(history, func(i, j int) bool {
+		return history[i].Created.Before(history[j].Created) // order by Created
+	})
+
+	writer := tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', tabwriter.AlignRight)
+	_, _ = fmt.Fprintln(writer, "Version\tDirty\tCreated\tModified")
+	for i := range history {
+		h := history[i]
+		_, _ = fmt.Fprintf(writer, "%d\t%v\t%v\t%v\n", h.Version, h.Dirty, h.Created, h.Modified)
+	}
+	_ = writer.Flush()
+	return nil
+}
+
+// MigrateRepair repairs the migration history table if it in a dirty state after a failed migration. After cleaning the
+// schema manually run this step to remove the latest migration from the history table.
+// The relevant options are LockTableName, LockIdentifier and VersionTableName.
+func MigrateRepair(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
+	options := defaultMigrateOptions()
+	for _, optFn := range opts {
+		if err := optFn(options); err != nil {
+			return err
+		}
+	}
+	lock, err := client.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
+	defer lock.Release()
+	if err != nil {
+		return err
+	}
+	if !lock.Success {
+		return fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry)
+	}
+
+	if err = client.EnsureMigrationTable(ctx, options.VersionTableName); err != nil {
+		return err
+	}
+
+	if err := client.RepairMigration(ctx, options.VersionTableName); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// MigrateSetupLock sets up the migration lock table.
+// The relevant options are LockTableName.
+func MigrateSetupLock(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
+	options := defaultMigrateOptions()
+	for _, optFn := range opts {
+		if err := optFn(options); err != nil {
+			return err
+		}
+	}
+	return client.SetupMigrationLock(ctx, options.LockTableName)
 }

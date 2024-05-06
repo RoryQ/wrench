@@ -182,6 +182,7 @@ func migrateUp(c *cobra.Command, args []string) error {
 		core.WithLockTable(migrationLockTable),
 		core.WithPartitionedDMLConcurrency(partitionedDMLConcurrency),
 		core.WithDetectPartitionedDML(detectPartitionedDML),
+		core.WithPrintRowsAffected(verbose),
 	)
 	if err != nil {
 		return &Error{

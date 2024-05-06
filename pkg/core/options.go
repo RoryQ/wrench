@@ -17,6 +17,8 @@ type migrateOptions struct {
 	PartitionedDMLConcurrency int
 	// DetectPartitionedDML is whether to detect partitioned DML statements for use with the PartitionedDML API.
 	DetectPartitionedDML bool
+	// PrintRowsAffected is whether to print the number of rows affected by each migration.
+	PrintRowsAffected bool
 }
 
 func defaultMigrateOptions() *migrateOptions {
@@ -85,6 +87,14 @@ func WithDetectPartitionedDML(val bool) MigrateOpt {
 func WithPartitionedDMLConcurrency[T int | uint16](concurrency T) MigrateOpt {
 	return func(opt *migrateOptions) error {
 		opt.PartitionedDMLConcurrency = int(concurrency)
+		return nil
+	}
+}
+
+// WithPrintRowsAffected sets whether to print the number of rows affected by each migration.
+func WithPrintRowsAffected(val bool) MigrateOpt {
+	return func(opt *migrateOptions) error {
+		opt.PrintRowsAffected = val
 		return nil
 	}
 }

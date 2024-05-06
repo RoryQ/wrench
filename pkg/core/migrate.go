@@ -105,7 +105,7 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 	default:
 		return errors.New("migration in undetermined state")
 	}
-	if false {
+	if options.PrintRowsAffected {
 		fmt.Print(migrationsOutput.String())
 	}
 

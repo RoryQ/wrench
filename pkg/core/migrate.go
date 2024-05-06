@@ -8,39 +8,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/uuid"
-
 	"github.com/roryq/wrench/pkg/spanner"
 )
 
-type migrationSequenceOptions struct {
-	Interval    uint
-	DigitLength int
-}
-
-func defaultSequenceOptions() migrationSequenceOptions {
-	return migrationSequenceOptions{
-		Interval:    10,
-		DigitLength: 6,
-	}
-}
-
-type MigrationSequenceOpt func(opt *migrationSequenceOptions) error
-
-func WithInterval[T int | uint | uint16](interval T) MigrationSequenceOpt {
-	return func(opt *migrationSequenceOptions) error {
-		opt.Interval = uint(interval)
-		return nil
-	}
-}
-
-func WithDigitLength(length int) MigrationSequenceOpt {
-	return func(opt *migrationSequenceOptions) error {
-		opt.DigitLength = length
-		return nil
-	}
-}
-
+// CreateMigrationFile creates a new migration file in the given directory. The name should be alphanumeric with underscores
+// or dashes only.
+// The sequence options configure how the migration sequence is created.
 func CreateMigrationFile(dir string, name string, opts ...MigrationSequenceOpt) (string, error) {
 	options := defaultSequenceOptions()
 	for _, optFn := range opts {
@@ -63,7 +36,7 @@ func CreateMigrationFile(dir string, name string, opts ...MigrationSequenceOpt) 
 		v = roundNext(ms[len(ms)-1].Version, options.Interval)
 	}
 
-	vStr := fmt.Sprintf("%0*d", options.DigitLength, v)
+	vStr := fmt.Sprintf("%0*d", options.ZeroPrefixLength, v)
 
 	var filename string
 	if name == "" {
@@ -85,57 +58,7 @@ func roundNext(n, next uint) uint {
 	return uint(math.Round(float64(n)/float64(next)))*next + next
 }
 
-type migrationOptions struct {
-	LockTableName             string
-	VersionTableName          string
-	LockIdentifier            string
-	SkipVersions              []uint
-	Limit                     int
-	PartitionedDMLConcurrency int
-	DetectPartitionedDML      bool
-}
-
-type MigrateOpt func(opt *migrationOptions) error
-
-func WithLockIdentifier(lockIdentifier string) MigrateOpt {
-	return func(opt *migrationOptions) error {
-		opt.LockIdentifier = lockIdentifier
-		return nil
-	}
-}
-
-func WithSkipVersions(skipVersions []uint) MigrateOpt {
-	return func(opt *migrationOptions) error {
-		opt.SkipVersions = skipVersions
-		return nil
-	}
-}
-
-func WithLockTable(name string) MigrateOpt {
-	return func(opt *migrationOptions) error {
-		opt.LockTableName = name
-		return nil
-	}
-}
-
-func WithLimit(limit int) MigrateOpt {
-	return func(opt *migrationOptions) error {
-		opt.Limit = limit
-		return nil
-	}
-}
-
-func defaultMigrateOptions() *migrationOptions {
-	return &migrationOptions{
-		LockIdentifier:       uuid.New().String(),
-		SkipVersions:         nil,
-		LockTableName:        "SchemaMigrationsLock",
-		VersionTableName:     "SchemaMigrations",
-		Limit:                -1,
-		DetectPartitionedDML: false,
-	}
-}
-
+// MigrateUp runs all migrations that haven't been run yet based on the contents of the history table.
 func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string, opts ...MigrateOpt) error {
 	options := defaultMigrateOptions()
 	for _, optFn := range opts {

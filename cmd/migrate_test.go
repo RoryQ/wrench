@@ -49,7 +49,7 @@ func TestCreateMigrationFile(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.filename, func(t *testing.T) {
-			filename, err := core.CreateMigrationFile(testdatadir, tc.filename, core.WithInterval(1), core.WithDigitLength(tc.digits))
+			filename, err := core.CreateMigrationFile(testdatadir, tc.filename, core.WithInterval(1), core.WithZeroPrefixLength(tc.digits))
 			if err != nil {
 				t.Fatal(err)
 			}

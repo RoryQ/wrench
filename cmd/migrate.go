@@ -118,7 +118,7 @@ func migrateCreate(c *cobra.Command, args []string) error {
 		}
 	}
 
-	filename, err := core.CreateMigrationFile(dir, name, core.WithInterval(sequenceInterval), core.WithDigitLength(6))
+	filename, err := core.CreateMigrationFile(dir, name, core.WithInterval(sequenceInterval), core.WithZeroPrefixLength(6))
 	if err != nil {
 		return &Error{
 			cmd: c,
@@ -174,7 +174,15 @@ func migrateUp(c *cobra.Command, args []string) error {
 	defer client.Close()
 
 	migrationsDir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
-	err = core.MigrateUp(ctx, client, migrationsDir, core.WithLimit(limit), core.WithSkipVersions(toSkip), core.WithLockIdentifier(lockIdentifier))
+	err = core.MigrateUp(ctx, client, migrationsDir,
+		core.WithLimit(limit),
+		core.WithSkipVersions(toSkip),
+		core.WithLockIdentifier(lockIdentifier),
+		core.WithVersionTable(migrationTableName),
+		core.WithLockTable(migrationLockTable),
+		core.WithPartitionedDMLConcurrency(partitionedDMLConcurrency),
+		core.WithDetectPartitionedDML(detectPartitionedDML),
+	)
 	if err != nil {
 		return &Error{
 			cmd: c,

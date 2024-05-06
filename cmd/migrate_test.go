@@ -24,7 +24,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/roryq/wrench/cmd"
+	"github.com/roryq/wrench/pkg/core"
 )
 
 func TestCreateMigrationFile(t *testing.T) {
@@ -49,7 +49,7 @@ func TestCreateMigrationFile(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.filename, func(t *testing.T) {
-			filename, err := cmd.CreateMigrationFile(testdatadir, tc.filename, tc.digits)
+			filename, err := core.CreateMigrationFile(testdatadir, tc.filename, core.WithInterval(1), core.WithDigitLength(tc.digits))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,7 +64,7 @@ func TestCreateMigrationFile(t *testing.T) {
 	}
 
 	t.Run("invalid name", func(t *testing.T) {
-		_, err := cmd.CreateMigrationFile(testdatadir, "あああ", 6)
+		_, err := core.CreateMigrationFile(testdatadir, "あああ")
 		if err.Error() != "Invalid migration file name." {
 			t.Errorf("err want `invalid name`, but got `%v`", err)
 		}

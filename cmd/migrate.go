@@ -24,7 +24,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,6 +34,7 @@ import (
 	"github.com/kennygrant/sanitize"
 	"github.com/spf13/cobra"
 
+	"github.com/roryq/wrench/pkg/core"
 	"github.com/roryq/wrench/pkg/spanner"
 )
 
@@ -118,7 +118,7 @@ func migrateCreate(c *cobra.Command, args []string) error {
 		}
 	}
 
-	filename, err := createMigrationFile(dir, name, 6)
+	filename, err := core.CreateMigrationFile(dir, name, core.WithInterval(sequenceInterval), core.WithDigitLength(6))
 	if err != nil {
 		return &Error{
 			cmd: c,
@@ -173,69 +173,14 @@ func migrateUp(c *cobra.Command, args []string) error {
 	}
 	defer client.Close()
 
-	lock, err := client.GetMigrationLock(ctx, migrationLockTable, lockIdentifier)
-	defer lock.Release()
+	migrationsDir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
+	err = core.MigrateUp(ctx, client, migrationsDir, core.WithLimit(limit), core.WithSkipVersions(toSkip), core.WithLockIdentifier(lockIdentifier))
 	if err != nil {
 		return &Error{
 			cmd: c,
 			err: err,
 		}
 	}
-	if !lock.Success {
-		return &Error{
-			cmd: c,
-			err: fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry),
-		}
-	}
-
-	dir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
-	migrations, err := spanner.LoadMigrations(dir, toSkip, detectPartitionedDML)
-	if err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
-		}
-	}
-
-	if err = client.EnsureMigrationTable(ctx, migrationTableName); err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
-		}
-	}
-
-	status, err := client.DetermineUpgradeStatus(ctx, migrationTableName)
-	if err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
-		}
-	}
-
-	concurrency := int(partitionedDMLConcurrency)
-
-	var migrationsOutput spanner.MigrationsOutput
-	switch status {
-	case spanner.ExistingMigrationsUpgradeStarted:
-		migrationsOutput, err = client.UpgradeExecuteMigrations(ctx, migrations, limit, migrationTableName)
-		if err != nil {
-			return err
-		}
-	case spanner.ExistingMigrationsUpgradeCompleted:
-		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, limit, migrationTableName, concurrency)
-		if err != nil {
-			return err
-		}
-	default:
-		return &Error{
-			cmd: c,
-			err: errors.New("migration in undetermined state"),
-		}
-	}
-	if verbose {
-		fmt.Print(migrationsOutput.String())
-	}
-
 	return nil
 }
 
@@ -374,10 +319,6 @@ func migrateLocker(c *cobra.Command, args []string) error {
 	return nil
 }
 
-func roundNext(n, next uint) uint {
-	return uint(math.Round(float64(n)/float64(next)))*next + next
-}
-
 func promptDescription() string {
 	fmt.Print("Please enter a short description for the migration file. Or press Enter to skip.\n>")
 	scanner := bufio.NewScanner(os.Stdin)
@@ -387,41 +328,4 @@ func promptDescription() string {
 		return ""
 	}
 	return strings.ReplaceAll(clean, ".", "-") // Dot should separate .up.sql or .sql only
-}
-
-func createMigrationFile(dir string, name string, digits int) (string, error) {
-	if name != "" && !spanner.MigrationNameRegex.MatchString(name) {
-		return "", errors.New("Invalid migration file name.")
-	}
-
-	ms, err := spanner.LoadMigrations(dir, nil, false)
-	if err != nil {
-		return "", err
-	}
-
-	var v uint = 1
-	if len(ms) > 0 {
-		v = roundNext(ms[len(ms)-1].Version, uint(sequenceInterval))
-	}
-	vStr := fmt.Sprint(v)
-
-	padding := digits - len(vStr)
-	if padding > 0 {
-		vStr = strings.Repeat("0", padding) + vStr
-	}
-
-	var filename string
-	if name == "" {
-		filename = filepath.Join(dir, fmt.Sprintf("%s.sql", vStr))
-	} else {
-		filename = filepath.Join(dir, fmt.Sprintf("%s_%s.sql", vStr, name))
-	}
-
-	fp, err := os.Create(filename)
-	if err != nil {
-		return "", err
-	}
-	fp.Close()
-
-	return filename, nil
 }

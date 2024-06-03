@@ -852,3 +852,66 @@ func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string,
 
 	return nil
 }
+
+func Test_parseDDL1(t *testing.T) {
+	tests := map[string]struct {
+		statement string
+		wantDdl   SchemaDDL
+		wantErr   assert.ErrorAssertionFunc
+	}{
+		"CREATE TABLE": {
+			statement: "CREATE TABLE Example(ID string) PRIMARY KEY(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE TABLE Example(ID string) PRIMARY KEY(ID)",
+				Filename:   "example.sql",
+				ObjectType: "table",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE INDEX": {
+			statement: "CREATE INDEX IX_Example ON Example(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE NULL_FILTERED INDEX": {
+			statement: "CREATE NULL_FILTERED INDEX IX_Example ON Example(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE NULL_FILTERED INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE UNIQUE INDEX": {
+			statement: "CREATE UNIQUE INDEX IX_Example ON Example(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE UNIQUE INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE VIEW": {
+			statement: "CREATE VIEW SingerNames\nSQL SECURITY INVOKER\nAS SELECT\n   Singers.SingerId AS SingerId,\n   Singers.FirstName || ' ' || Singers.LastName AS Name\nFROM Singers;",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE VIEW SingerNames\nSQL SECURITY INVOKER\nAS SELECT\n   Singers.SingerId AS SingerId,\n   Singers.FirstName || ' ' || Singers.LastName AS Name\nFROM Singers;",
+				Filename:   "singernames.sql",
+				ObjectType: "view",
+			},
+			wantErr: assert.NoError,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			gotDdl, err := parseDDL(tt.statement)
+			if !tt.wantErr(t, err, fmt.Sprintf("parseDDL(%v)", tt.statement)) {
+				return
+			}
+			assert.Equalf(t, tt.wantDdl, gotDdl, "parseDDL(%v)", tt.statement)
+		})
+	}
+}

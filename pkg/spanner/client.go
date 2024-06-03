@@ -34,6 +34,7 @@ import (
 	"github.com/sourcegraph/conc/pool"
 
 	"github.com/roryq/wrench/pkg/spannerz"
+	"github.com/roryq/wrench/pkg/xregexp"
 
 	"google.golang.org/grpc/codes"
 
@@ -62,7 +63,7 @@ const (
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
 	indexOptions              = `unique\s+|null_filtered\s+|unique\s+null_filtered\s+`
-	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index))\s+(?P<ObjectName>\w+).+`)
+	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index|view))\s+(?P<ObjectName>\w+).*`)
 )
 
 type UpgradeStatus string
@@ -210,12 +211,9 @@ type SchemaDDL struct {
 }
 
 func parseDDL(statement string) (ddl SchemaDDL, err error) {
-	r := ddlParse.FindStringSubmatch(statement)
-	matches := make(map[string]string)
-	for i, n := range ddlParse.SubexpNames() {
-		if i != 0 && n != "" && i < len(r) {
-			matches[n] = r[i]
-		}
+	matches, found := xregexp.FindMatchGroups(ddlParse, statement)
+	if !found {
+		return ddl, errors.New("could not parse DDL statement")
 	}
 
 	objectType := strings.ToLower(matches["ObjectType"])

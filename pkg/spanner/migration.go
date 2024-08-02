@@ -40,7 +40,8 @@ var (
 	// 001.sql
 	// 001_name.sql
 	// 001_name.up.sql
-	migrationFileRegex = regexp.MustCompile(`^([0-9]+)(?:_([a-zA-Z0-9_\-]+))?(\.up)?\.sql$`)
+	// 001_name.generated.sql
+	migrationFileRegex = regexp.MustCompile(`^([0-9]+)(?:_([a-zA-Z0-9_\-]+))?(?:[.]up|[.]generated)?\.sql$`)
 
 	MigrationNameRegex = regexp.MustCompile(`[a-zA-Z0-9_\-]+`)
 
@@ -114,7 +115,7 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 		}
 
 		matches := migrationFileRegex.FindStringSubmatch(f.Name())
-		if len(matches) != 4 {
+		if matches == nil {
 			continue
 		}
 

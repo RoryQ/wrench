@@ -22,6 +22,8 @@ package spanner
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -313,6 +315,41 @@ func Test_isPartitionedDMLOnly(t *testing.T) {
 			if got := isPartitionedDMLOnly(tt.statement); got != tt.want {
 				t.Errorf("isPartitionedDMLOnly() = %v, want %v", got, tt.want)
 			}
+		})
+	}
+}
+
+func Test_migrationFileRegex(t *testing.T) {
+	tests := map[string]struct {
+		input    string
+		expected []string
+	}{
+		"NoName": {
+			input:    "001.sql",
+			expected: []string{"001.sql", "001", ""},
+		},
+		"WithName": {
+			input:    "001_name.sql",
+			expected: []string{"001_name.sql", "001", "name"},
+		},
+		"MatchAndIgnoreUp": {
+			input:    "001_name.up.sql",
+			expected: []string{"001_name.up.sql", "001", "name"},
+		},
+		"MatchAndIgnoreGenerated": {
+			input:    "001_name.generated.sql",
+			expected: []string{"001_name.generated.sql", "001", "name"},
+		},
+		"NotMatchDownMigration": {
+			input:    "001_name.down.sql",
+			expected: nil,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			matches := migrationFileRegex.FindStringSubmatch(tc.input)
+			assert.Equal(t, tc.expected, matches)
 		})
 	}
 }

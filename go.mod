@@ -14,7 +14,7 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.9.0
 	google.golang.org/api v0.196.0
-	google.golang.org/grpc v1.66.0
+	google.golang.org/grpc v1.66.2
 )
 
 require (

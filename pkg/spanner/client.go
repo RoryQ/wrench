@@ -654,15 +654,15 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			}
 		}
 
-		switch m.kind {
-		case statementKindDDL:
+		switch m.Kind {
+		case StatementKindDDL:
 			if err := c.ApplyDDL(ctx, m.Statements); err != nil {
 				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
 				}
 			}
-		case statementKindDML:
+		case StatementKindDML:
 			rowsAffected, err := c.ApplyDML(ctx, m.Statements)
 			if err != nil {
 				return nil, &Error{
@@ -674,7 +674,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			migrationsOutput[m.FileName] = migrationInfo{
 				RowsAffected: rowsAffected,
 			}
-		case statementKindPartitionedDML:
+		case StatementKindPartitionedDML:
 			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements, partitionedConcurrency)
 			if err != nil {
 				return nil, &Error{

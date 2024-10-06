@@ -57,9 +57,9 @@ var (
 )
 
 const (
-	statementKindDDL            statementKind = "DDL"
-	statementKindDML            statementKind = "DML"
-	statementKindPartitionedDML statementKind = "PartitionedDML"
+	StatementKindDDL            StatementKind = "DDL"
+	StatementKindDML            StatementKind = "DML"
+	StatementKindPartitionedDML StatementKind = "PartitionedDML"
 )
 
 type (
@@ -77,12 +77,12 @@ type (
 		// Statements is the migration statements
 		Statements []string
 
-		kind statementKind
+		Kind StatementKind
 	}
 
 	Migrations []*Migration
 
-	statementKind string
+	StatementKind string
 )
 
 func (ms Migrations) Len() int {
@@ -144,7 +144,7 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 			Name:       matches[2],
 			FileName:   f.Name(),
 			Statements: statements,
-			kind:       kind,
+			Kind:       kind,
 		})
 	}
 
@@ -185,38 +185,38 @@ func toStatements(file []byte) []string {
 	return statements
 }
 
-func inspectStatementsKind(statements []string, detectPartitionedDML bool) (statementKind, error) {
-	kindMap := map[statementKind]uint64{
-		statementKindDDL:            0,
-		statementKindDML:            0,
-		statementKindPartitionedDML: 0,
+func inspectStatementsKind(statements []string, detectPartitionedDML bool) (StatementKind, error) {
+	kindMap := map[StatementKind]uint64{
+		StatementKindDDL:            0,
+		StatementKindDML:            0,
+		StatementKindPartitionedDML: 0,
 	}
 
 	for _, s := range statements {
 		kindMap[getStatementKind(s)]++
 	}
 
-	if distinctKind(kindMap, statementKindDDL) {
-		return statementKindDDL, nil
+	if distinctKind(kindMap, StatementKindDDL) {
+		return StatementKindDDL, nil
 	}
 
 	// skip further DML type inspection unless detectPartitionedDML is true
-	if !detectPartitionedDML && distinctKind(kindMap, statementKindDML, statementKindPartitionedDML) {
-		return statementKindDML, nil
+	if !detectPartitionedDML && distinctKind(kindMap, StatementKindDML, StatementKindPartitionedDML) {
+		return StatementKindDML, nil
 	}
 
-	if detectPartitionedDML && distinctKind(kindMap, statementKindDML) {
-		return statementKindDML, nil
+	if detectPartitionedDML && distinctKind(kindMap, StatementKindDML) {
+		return StatementKindDML, nil
 	}
 
-	if detectPartitionedDML && distinctKind(kindMap, statementKindPartitionedDML) {
-		return statementKindPartitionedDML, nil
+	if detectPartitionedDML && distinctKind(kindMap, StatementKindPartitionedDML) {
+		return StatementKindPartitionedDML, nil
 	}
 
 	return "", errors.New("Cannot specify DDL and DML in the same migration file")
 }
 
-func distinctKind(kindMap map[statementKind]uint64, kinds ...statementKind) bool {
+func distinctKind(kindMap map[StatementKind]uint64, kinds ...StatementKind) bool {
 	// sum the target statement kinds
 	var target uint64
 	for _, k := range kinds {
@@ -232,16 +232,16 @@ func distinctKind(kindMap map[statementKind]uint64, kinds ...statementKind) bool
 	return target == total
 }
 
-func getStatementKind(statement string) statementKind {
+func getStatementKind(statement string) StatementKind {
 	if isPartitionedDMLOnly(statement) {
-		return statementKindPartitionedDML
+		return StatementKindPartitionedDML
 	}
 
 	if isDMLAny(statement) {
-		return statementKindDML
+		return StatementKindDML
 	}
 
-	return statementKindDDL
+	return StatementKindDDL
 }
 
 func isPartitionedDMLOnly(statement string) bool {

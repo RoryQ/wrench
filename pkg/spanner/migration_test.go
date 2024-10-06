@@ -100,27 +100,27 @@ func Test_getStatementKind(t *testing.T) {
 	tests := []struct {
 		name      string
 		statement string
-		want      statementKind
+		want      StatementKind
 	}{
 		{
 			"ALTER statement is DDL",
 			TestStmtDDL,
-			statementKindDDL,
+			StatementKindDDL,
 		},
 		{
 			"UPDATE statement is PartitionedDML",
 			TestStmtPartitionedDML,
-			statementKindPartitionedDML,
+			StatementKindPartitionedDML,
 		},
 		{
 			"INSERT statement is DML",
 			TestStmtDML,
-			statementKindDML,
+			StatementKindDML,
 		},
 		{
 			"lowercase insert statement is DML",
 			TestStmtDML,
-			statementKindDML,
+			StatementKindDML,
 		},
 	}
 	for _, tt := range tests {
@@ -136,31 +136,31 @@ func Test_inspectStatementsKind(t *testing.T) {
 	tests := []struct {
 		name                 string
 		statements           []string
-		want                 statementKind
+		want                 StatementKind
 		detectPartitionedDML bool
 		wantErr              bool
 	}{
 		{
 			name:       "Only DDL returns DDL",
 			statements: []string{TestStmtDDL, TestStmtDDL},
-			want:       statementKindDDL,
+			want:       StatementKindDDL,
 		},
 		{
 			name:                 "Only PartitionedDML returns PartitionedDML",
 			statements:           []string{TestStmtPartitionedDML, TestStmtPartitionedDML},
-			want:                 statementKindPartitionedDML,
+			want:                 StatementKindPartitionedDML,
 			detectPartitionedDML: true,
 		},
 		{
 			name:                 "No PartitionedDML detection returns DML",
 			statements:           []string{TestStmtPartitionedDML, TestStmtPartitionedDML},
-			want:                 statementKindDML,
+			want:                 StatementKindDML,
 			detectPartitionedDML: false,
 		},
 		{
 			name:       "Only DML returns DML",
 			statements: []string{TestStmtDML, TestStmtDML},
-			want:       statementKindDML,
+			want:       StatementKindDML,
 		},
 		{
 			name:       "DML and DDL returns error",
@@ -170,7 +170,7 @@ func Test_inspectStatementsKind(t *testing.T) {
 		{
 			name:       "DML and undetected PartitionedDML returns DML",
 			statements: []string{TestStmtDML, TestStmtPartitionedDML},
-			want:       statementKindDML,
+			want:       StatementKindDML,
 		},
 		{
 			name:                 "DML and detected PartitionedDML returns error",
@@ -192,7 +192,7 @@ func Test_inspectStatementsKind(t *testing.T) {
 		{
 			name:       "no statements defaults to DDL as before",
 			statements: []string{},
-			want:       statementKindDDL,
+			want:       StatementKindDDL,
 		},
 	}
 	for _, tt := range tests {

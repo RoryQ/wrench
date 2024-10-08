@@ -225,7 +225,7 @@ func TestExecuteMigrations(t *testing.T) {
 
 	var migrationsOutput MigrationsOutput
 	// only apply 000002.sql by specifying limit 1.
-	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, ExecuteMigrationOptions{}); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
@@ -238,7 +238,7 @@ func TestExecuteMigrations(t *testing.T) {
 	ensureMigrationVersionRecord(t, ctx, client, 2, false)
 	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
 
-	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, ExecuteMigrationOptions{}); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
@@ -521,7 +521,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+	if _, err = client.ExecuteMigrations(ctx, migrations, ExecuteMigrationOptions{}); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -539,7 +539,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+	if _, err := client.ExecuteMigrations(ctx, migrations, ExecuteMigrationOptions{}); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err = client.GetMigrationHistory(ctx, migrationTable)
@@ -563,7 +563,7 @@ func TestUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}
-		if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+		if _, err := client.ExecuteMigrations(ctx, migrations, ExecuteMigrationOptions{}); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 		expected, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -581,7 +581,7 @@ func TestUpgrade(t *testing.T) {
 		if client.tableExists(ctx, upgradeIndicator) == false {
 			t.Error("upgrade indicator should exist")
 		}
-		if _, err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+		if _, err := client.UpgradeExecuteMigrations(ctx, migrations, ExecuteMigrationOptions{}); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 
@@ -845,7 +845,7 @@ func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string,
 		return err
 	}
 
-	_, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1)
+	_, err = client.ExecuteMigrations(ctx, migrations, ExecuteMigrationOptions{})
 	if err != nil {
 		return err
 	}
@@ -912,6 +912,75 @@ func Test_parseDDL1(t *testing.T) {
 				return
 			}
 			assert.Equalf(t, tt.wantDdl, gotDdl, "parseDDL(%v)", tt.statement)
+		})
+	}
+}
+
+func Test_mergeMigrations(t *testing.T) {
+	tests := map[string]struct {
+		migrations Migrations
+		want       []FastForwardMigrations
+	}{
+		"AllDDL": {
+			migrations: Migrations{
+				&Migration{Version: 1, Kind: StatementKindDDL, Statements: []string{"A", "B", "C"}},
+				&Migration{Version: 2, Kind: StatementKindDDL, Statements: []string{"D", "E", "F"}},
+				&Migration{Version: 3, Kind: StatementKindDDL, Statements: []string{"H", "I", "J"}},
+			},
+			want: []FastForwardMigrations{
+				{
+					Kind: StatementKindDDL,
+					MigrationSequences: Migrations{
+						&Migration{Version: 1, Kind: StatementKindDDL, Statements: []string{"A", "B", "C"}},
+						&Migration{Version: 2, Kind: StatementKindDDL, Statements: []string{"D", "E", "F"}},
+						&Migration{Version: 3, Kind: StatementKindDDL, Statements: []string{"H", "I", "J"}},
+					},
+				},
+			},
+		},
+		"MixedKinds": {
+			migrations: Migrations{
+				&Migration{Version: 1, Kind: StatementKindDDL, Statements: []string{"A"}},
+				&Migration{Version: 2, Kind: StatementKindDDL, Statements: []string{"B"}},
+				&Migration{Version: 3, Kind: StatementKindDDL, Statements: []string{"C"}},
+				&Migration{Version: 4, Kind: StatementKindDML, Statements: []string{"D"}},
+				&Migration{Version: 5, Kind: StatementKindDML, Statements: []string{"E"}},
+				&Migration{Version: 6, Kind: StatementKindDML, Statements: []string{"F"}},
+				&Migration{Version: 7, Kind: StatementKindPartitionedDML, Statements: []string{"G"}},
+				&Migration{Version: 8, Kind: StatementKindPartitionedDML, Statements: []string{"H"}},
+				&Migration{Version: 9, Kind: StatementKindPartitionedDML, Statements: []string{"I"}},
+			},
+			want: []FastForwardMigrations{
+				{
+					Kind: StatementKindDDL,
+					MigrationSequences: Migrations{
+						&Migration{Version: 1, Kind: StatementKindDDL, Statements: []string{"A"}},
+						&Migration{Version: 2, Kind: StatementKindDDL, Statements: []string{"B"}},
+						&Migration{Version: 3, Kind: StatementKindDDL, Statements: []string{"C"}},
+					},
+				},
+				{
+					Kind: StatementKindDML,
+					MigrationSequences: Migrations{
+						&Migration{Version: 4, Kind: StatementKindDML, Statements: []string{"D"}},
+						&Migration{Version: 5, Kind: StatementKindDML, Statements: []string{"E"}},
+						&Migration{Version: 6, Kind: StatementKindDML, Statements: []string{"F"}},
+					},
+				},
+				{
+					Kind: StatementKindPartitionedDML,
+					MigrationSequences: Migrations{
+						&Migration{Version: 7, Kind: StatementKindPartitionedDML, Statements: []string{"G"}},
+						&Migration{Version: 8, Kind: StatementKindPartitionedDML, Statements: []string{"H"}},
+						&Migration{Version: 9, Kind: StatementKindPartitionedDML, Statements: []string{"I"}},
+					},
+				},
+			},
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tt.want, mergeMigrations(tt.migrations))
 		})
 	}
 }

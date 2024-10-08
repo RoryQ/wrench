@@ -100,6 +100,7 @@ func init() {
 
 	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
 	migrateUpCmd.Flags().UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")
+	migrateUpCmd.Flags().Bool(flagFastForward, false, "Merge similar subsequent migrations into the same transaction. Recommended only for temporary test databases.")
 }
 
 func migrateCreate(c *cobra.Command, args []string) error {
@@ -165,6 +166,14 @@ func migrateUp(c *cobra.Command, args []string) error {
 		}
 	}
 
+	fastForward, err := c.Flags().GetBool(flagFastForward)
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
+
 	client, err := newSpannerClient(ctx, c)
 	if err != nil {
 		return err
@@ -181,6 +190,7 @@ func migrateUp(c *cobra.Command, args []string) error {
 		core.WithPartitionedDMLConcurrency(partitionedDMLConcurrency),
 		core.WithDetectPartitionedDML(detectPartitionedDML),
 		core.WithPrintRowsAffected(verbose),
+		core.WithFastForward(fastForward),
 	)
 	if err != nil {
 		return &Error{

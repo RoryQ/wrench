@@ -82,6 +82,11 @@ type (
 
 	Migrations []*Migration
 
+	FastForwardMigrations struct {
+		MigrationSequences Migrations
+		Kind               StatementKind
+	}
+
 	StatementKind string
 )
 
@@ -95,6 +100,22 @@ func (ms Migrations) Swap(i, j int) {
 
 func (ms Migrations) Less(i, j int) bool {
 	return ms[i].Version < ms[j].Version
+}
+
+func (f FastForwardMigrations) Versions() []uint {
+	versions := make([]uint, len(f.MigrationSequences))
+	for _, m := range f.MigrationSequences {
+		versions = append(versions, m.Version)
+	}
+	return versions
+}
+
+func (f FastForwardMigrations) Statements() []string {
+	stmts := make([]string, len(f.MigrationSequences))
+	for _, m := range f.MigrationSequences {
+		stmts = append(stmts, m.Statements...)
+	}
+	return stmts
 }
 
 func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (Migrations, error) {

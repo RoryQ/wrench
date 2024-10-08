@@ -468,13 +468,14 @@ func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string, c
 	return numAffectedRows.Load(), nil
 }
 
-func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) (MigrationsOutput, error) {
-	err := c.backfillMigrations(ctx, migrations, tableName)
+func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, opts ExecuteMigrationOptions) (MigrationsOutput, error) {
+	applyDefaults(&opts)
+	err := c.backfillMigrations(ctx, migrations, opts.VersionTableName)
 	if err != nil {
 		return nil, err
 	}
 
-	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName, 1)
+	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -603,10 +604,30 @@ func (i MigrationsOutput) String() string {
 	return fmt.Sprintf("%s\n", output)
 }
 
-func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int) (MigrationsOutput, error) {
+type ExecuteMigrationOptions struct {
+	Limit                     int
+	VersionTableName          string
+	PartitionedDMLConcurrency int
+	FastForward               bool
+}
+
+func applyDefaults(opts *ExecuteMigrationOptions) {
+	if opts.Limit == 0 {
+		opts.Limit = -1
+	}
+	if opts.VersionTableName == "" {
+		opts.VersionTableName = "SchemaMigrations"
+	}
+	if opts.PartitionedDMLConcurrency == 0 {
+		opts.PartitionedDMLConcurrency = 1
+	}
+}
+
+func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, opts ExecuteMigrationOptions) (MigrationsOutput, error) {
+	applyDefaults(&opts)
 	sort.Sort(migrations)
 
-	version, dirty, err := c.GetSchemaMigrationVersion(ctx, tableName)
+	version, dirty, err := c.GetSchemaMigrationVersion(ctx, opts.VersionTableName)
 	if err != nil {
 		var se *Error
 		if !errors.As(err, &se) || se.Code != ErrorCodeNoMigration {
@@ -624,7 +645,11 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		}
 	}
 
-	history, err := c.GetMigrationHistory(ctx, tableName)
+	if opts.FastForward {
+		return c.executeFastForwardMigrations(ctx, migrations, version, opts.VersionTableName)
+	}
+
+	history, err := c.GetMigrationHistory(ctx, opts.VersionTableName)
 	if err != nil {
 		return nil, &Error{
 			Code: ErrorCodeExecuteMigrations,
@@ -639,7 +664,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 	var migrationsOutput MigrationsOutput = make(MigrationsOutput)
 	var count int
 	for _, m := range migrations {
-		if limit == 0 {
+		if opts.Limit == 0 {
 			break
 		}
 
@@ -647,7 +672,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			continue
 		}
 
-		if err := c.setSchemaMigrationVersion(ctx, m.Version, true, tableName); err != nil {
+		if err := c.setSchemaMigrationVersion(ctx, m.Version, true, opts.VersionTableName); err != nil {
 			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
@@ -675,7 +700,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 				RowsAffected: rowsAffected,
 			}
 		case StatementKindPartitionedDML:
-			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements, partitionedConcurrency)
+			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements, opts.PartitionedDMLConcurrency)
 			if err != nil {
 				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
@@ -699,7 +724,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			fmt.Printf("%d/up\n", m.Version)
 		}
 
-		if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
+		if err := c.setSchemaMigrationVersion(ctx, m.Version, false, opts.VersionTableName); err != nil {
 			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
@@ -707,7 +732,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		}
 
 		count++
-		if limit > 0 && count == limit {
+		if opts.Limit > 0 && count == opts.Limit {
 			break
 		}
 	}
@@ -752,6 +777,123 @@ func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string
 	}
 
 	return uint(v), dirty, nil
+}
+
+func (c *Client) executeFastForwardMigrations(ctx context.Context, migrations Migrations, currentDBVersion uint, tableName string) (MigrationsOutput, error) {
+	if currentDBVersion > 0 {
+		return nil, errors.New("fast forward migrations are only supported on clean databases")
+	}
+
+	sequences := mergeMigrations(migrations)
+
+	for _, sequence := range sequences {
+		err := c.setSchemaMigrationVersions(ctx, sequence.Versions(), true, tableName)
+		if err != nil {
+			return nil, &Error{
+				Code: ErrorCodeExecuteMigrations,
+				err:  err,
+			}
+		}
+
+		// apply statements
+		switch sequence.Kind {
+		case StatementKindDDL:
+			if err := c.ApplyDDL(ctx, sequence.Statements()); err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+		case StatementKindDML:
+			_, err := c.ApplyDML(ctx, sequence.Statements())
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+
+		case StatementKindPartitionedDML:
+			_, err := c.ApplyPartitionedDML(ctx, sequence.Statements(), 100)
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+
+		default:
+			return nil, &Error{
+				Code: ErrorCodeExecuteMigrations,
+				err:  fmt.Errorf("unknown query type, versions: %v", sequence.Versions()),
+			}
+		}
+
+		fmt.Printf("%v versions applied\n", sequence.Versions())
+
+		err = c.setSchemaMigrationVersions(ctx, sequence.Versions(), false, tableName)
+		if err != nil {
+		}
+		return nil, &Error{
+			Code: ErrorCodeExecuteMigrations,
+			err:  err,
+		}
+	}
+
+	return nil, nil
+}
+
+// merge migrations with subsequent of the same Kind
+func mergeMigrations(migrations Migrations) []FastForwardMigrations {
+	sequences := []FastForwardMigrations{}
+	group := FastForwardMigrations{}
+	for i, m := range migrations {
+		if i == 0 {
+			group.Kind = m.Kind
+			group.MigrationSequences = append(group.MigrationSequences, m)
+			continue
+		}
+
+		if group.Kind == m.Kind {
+			group.MigrationSequences = append(group.MigrationSequences, m)
+			continue
+		}
+
+		sequences = append(sequences, group)
+		group = FastForwardMigrations{
+			MigrationSequences: []*Migration{m},
+			Kind:               m.Kind,
+		}
+	}
+	return append(sequences, group)
+}
+
+func (c *Client) setSchemaMigrationVersions(ctx context.Context, versions []uint, dirty bool, tableName string) error {
+	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+		m := []*spanner.Mutation{spanner.Delete(tableName, spanner.AllKeys())}
+		for _, version := range versions {
+			m = append(m, spanner.Insert(tableName, []string{"Version", "Dirty"}, []interface{}{int64(version), dirty}))
+		}
+		if err := tx.BufferWrite(m); err != nil {
+			return err
+		}
+
+		for _, version := range versions {
+			err := c.upsertVersionHistory(ctx, tx, int64(version), dirty, tableName+historyStr)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return &Error{
+			Code: ErrorCodeSetMigrationVersion,
+			err:  err,
+		}
+	}
+
+	return nil
 }
 
 // setSchemaMigrationVersion will set a specific version in the version and history table without checking existing state

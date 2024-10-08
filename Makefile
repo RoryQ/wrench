@@ -1,6 +1,8 @@
+RUN ?= .*
+
 .PHONY: test
 test: _spanner-up
-	go test -race -v -count=1 ./...
+	go test -race -v -count=1 ./... -run=$(RUN)
 	-@make _spanner-down
 
 .PHONY: README.md
@@ -34,7 +36,7 @@ _spanner-up:
 _spanner-down:
 	-@docker stop spanner-tests >/dev/null 2>&1
 
-S_SPANNER_PORT = $(shell docker port spanner-tests 9010 | sed 's/0.0.0.0/localhost/')
+S_SPANNER_PORT = $(shell docker port spanner-tests 9010 | grep '0.0.0.0' | sed 's/0.0.0.0/localhost/')
 S_PROJECT = test-project
 S_INSTANCE = my-instance
 

@@ -1,6 +1,10 @@
 package core
 
-import "github.com/google/uuid"
+import (
+	"errors"
+
+	"github.com/google/uuid"
+)
 
 type migrateOptions struct {
 	// LockTableName is the name of the table that stores the lock.
@@ -19,6 +23,8 @@ type migrateOptions struct {
 	DetectPartitionedDML bool
 	// PrintRowsAffected is whether to print the number of rows affected by each migration.
 	PrintRowsAffected bool
+	// FastForward will run migrations in the fewest transactions possible by merging related migration Kinds.
+	FastForward bool
 }
 
 func defaultMigrateOptions() *migrateOptions {
@@ -29,6 +35,7 @@ func defaultMigrateOptions() *migrateOptions {
 		VersionTableName:     "SchemaMigrations",
 		Limit:                -1,
 		DetectPartitionedDML: false,
+		FastForward:          false,
 	}
 }
 
@@ -62,6 +69,9 @@ func WithLockTable(name string) MigrateOpt {
 // WithLimit sets the maximum number of migrations to apply.
 func WithLimit(limit int) MigrateOpt {
 	return func(opt *migrateOptions) error {
+		if opt.FastForward {
+			return errors.New("fast-forward option cannot be used with limit")
+		}
 		opt.Limit = limit
 		return nil
 	}
@@ -95,6 +105,16 @@ func WithPartitionedDMLConcurrency[T int | uint16](concurrency T) MigrateOpt {
 func WithPrintRowsAffected(val bool) MigrateOpt {
 	return func(opt *migrateOptions) error {
 		opt.PrintRowsAffected = val
+		return nil
+	}
+}
+
+func WithFastForward(val bool) MigrateOpt {
+	return func(opt *migrateOptions) error {
+		if opt.Limit > -1 {
+			return errors.New("fast-forward option cannot be used with limit")
+		}
+		opt.FastForward = val
 		return nil
 	}
 }

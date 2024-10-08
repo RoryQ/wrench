@@ -92,15 +92,21 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		return err
 	}
 
+	migrationOptions := spanner.ExecuteMigrationOptions{
+		Limit:                     options.Limit,
+		VersionTableName:          options.VersionTableName,
+		PartitionedDMLConcurrency: options.PartitionedDMLConcurrency,
+		FastForward:               options.FastForward,
+	}
 	var migrationsOutput spanner.MigrationsOutput
 	switch status {
 	case spanner.ExistingMigrationsUpgradeStarted:
-		migrationsOutput, err = client.UpgradeExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName)
+		migrationsOutput, err = client.UpgradeExecuteMigrations(ctx, migrations, migrationOptions)
 		if err != nil {
 			return err
 		}
 	case spanner.ExistingMigrationsUpgradeCompleted:
-		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency)
+		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, migrationOptions)
 		if err != nil {
 			return err
 		}

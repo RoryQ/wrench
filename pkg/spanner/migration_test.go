@@ -454,12 +454,12 @@ SELECT 1 FROM Foo
 
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("InvalidMigrationKind", func(t *testing.T) {
-			got, err := parseMigrationDirectives(fmt.Sprintf(`/*
+			got, err := parseMigrationDirectives(`/*
 @wrench.migrationKind=foo
 @wrench.concurrency=123
 */
 SELECT 1 FROM Foo
-`))
+`)
 			assert.Zero(t, got)
 			assert.Error(t, err)
 		})

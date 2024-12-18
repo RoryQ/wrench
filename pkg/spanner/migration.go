@@ -62,8 +62,6 @@ const (
 	StatementKindDDL            StatementKind = "DDL"
 	StatementKindDML            StatementKind = "DML"
 	StatementKindPartitionedDML StatementKind = "PartitionedDML"
-
-	MigrationKindFixedPointIterationDML MigrationKind = "FixedPointIterationDML"
 )
 
 type (
@@ -89,18 +87,12 @@ type (
 
 	// MigrationDirectives configures how the migration should be executed.
 	MigrationDirectives struct {
-		// Kind defines the execution behaviour for the migration when applying.
-		MigrationKind MigrationKind
-		// Kind defines the execution concurrency. Only applicable when
-		// MigrationKind is MigrationKindFixedPointIterationDML.
-		Concurrency int
+		placeholder string
 	}
 
 	Migrations []*Migration
 
 	StatementKind string
-
-	MigrationKind string
 )
 
 func (ms Migrations) Len() int {
@@ -161,11 +153,6 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 		directives, err := parseMigrationDirectives(string(file))
 		if err != nil {
 			return nil, err
-		}
-
-		// Validate migration-scoped config against the migration.
-		if directives.MigrationKind != "" {
-			return nil, fmt.Errorf("%s: unimplemented: migration kind %s", f.Name(), directives.MigrationKind)
 		}
 
 		migrations = append(migrations, &Migration{
@@ -286,8 +273,9 @@ func isDMLAny(statement string) bool {
 // @wrench.{key}={value} from the migration preamble.
 func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 	const (
-		migrationKindKey = "MigrationKind"
-		concurrencyKey   = "Concurrency"
+		// placeholderKey is a placeholder to validate parsing until a directive
+		// is implemented.
+		placeholderKey = "TODO"
 	)
 
 	// matches a migration directive in the format @wrench.{key}={value}
@@ -298,18 +286,8 @@ func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 	for _, match := range directiveMatches {
 		key, val := match["Key"], match["Value"]
 		switch key {
-		case migrationKindKey:
-			migrationKind := MigrationKind(val)
-			if migrationKind != MigrationKindFixedPointIterationDML {
-				return MigrationDirectives{}, fmt.Errorf("invalid migration kind %q", migrationKind)
-			}
-			directives.MigrationKind = migrationKind
-		case concurrencyKey:
-			concurrency, err := strconv.Atoi(val)
-			if err != nil {
-				return MigrationDirectives{}, fmt.Errorf("invalid concurrency value %q", val)
-			}
-			directives.Concurrency = concurrency
+		case placeholderKey:
+			directives.placeholder = val
 		default:
 			return directives, fmt.Errorf("unknown migration directive: %s", key)
 		}

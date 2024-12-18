@@ -20,10 +20,12 @@
 package spanner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -914,4 +916,104 @@ func Test_parseDDL1(t *testing.T) {
 			assert.Equalf(t, tt.wantDdl, gotDdl, "parseDDL(%v)", tt.statement)
 		})
 	}
+}
+
+func Test_fixedPointIterativeApply(t *testing.T) {
+	newApplyFunc := func(t *testing.T) (func(context.Context, []string) (int64, error), *[]string) {
+		var callHistory []string
+		var mu sync.Mutex
+		applyFn := func(_ context.Context, s []string) (int64, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, s, 1)
+			callHistory = append(callHistory, s[0])
+
+			if countOccurrences(callHistory, s[0]) > 10 {
+				return 0, nil
+			}
+
+			// Return a static 100 "rows affected" per call the first 10 times
+			return 100, nil
+		}
+		return applyFn, &callHistory
+	}
+
+	t.Run("CallsEachStatementUntilFixedPointReached", func(t *testing.T) {
+		applyFn, callHistory := newApplyFunc(t)
+
+		stmts := []string{"stmt1", "stmt2", "stmt3"}
+		got, err := fixedPointIterativeApply(applyFn, 1)(context.Background(), stmts)
+		require.NoError(t, err)
+
+		// Total number of rows should equal the number of times each statement was called
+		expectedRowCount := 3000 // 3 statements * (10 calls * 100 row count) + (1 call * 0 row count)
+		assert.EqualValues(t, expectedRowCount, got)
+
+		// Validate that each statement was called the expected number of times
+		for _, stmt := range stmts {
+			// no rows affected on the 11th call
+			assert.Equal(t, 11, countOccurrences(*callHistory, stmt))
+		}
+
+		// Validate that calls were ordered with concurrency = 1
+		assertOrdered(t, *callHistory)
+	})
+
+	t.Run("Concurrency>1", func(t *testing.T) {
+		applyFn, callHistory := newApplyFunc(t)
+
+		stmts := []string{"stmt1", "stmt2", "stmt3", "stmt4", "stmt5", "stmt6"}
+		got, err := fixedPointIterativeApply(applyFn, 10)(context.Background(), stmts)
+		require.NoError(t, err)
+
+		// Total number of rows should equal the number of times each statement was called
+		expectedRowCount := 6000 // 6 statements * (10 calls * 100 row count) + (1 call * 0 row count)
+		assert.EqualValues(t, expectedRowCount, got)
+
+		// Validate that each statement was called the expected number of times
+		for _, stmt := range stmts {
+			// no rows affected on the 11th call
+			assert.Equal(t, 11, countOccurrences(*callHistory, stmt))
+		}
+
+		// Validate that calls were unordered with concurrency > 1
+		assertNotOrdered(t, *callHistory)
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		applyFn := func(_ context.Context, s []string) (int64, error) {
+			return 0, assert.AnError
+		}
+		iterativeApplyFn := fixedPointIterativeApply(applyFn, 1)
+		got, err := iterativeApplyFn(context.Background(), []string{"stmt1", "stmt2", "stmt3"})
+		require.ErrorIs(t, err, assert.AnError)
+		assert.Zero(t, got)
+	})
+}
+
+func assertOrdered[T cmp.Ordered](t *testing.T, vs []T) {
+	assert.True(t, isOrdered(vs), "slice is unordered: %v", vs)
+}
+
+func assertNotOrdered[T cmp.Ordered](t *testing.T, vs []T) {
+	assert.False(t, isOrdered(vs), "slice is ordered: %v", vs)
+}
+
+func isOrdered[T cmp.Ordered](vs []T) bool {
+	for i := 0; i < len(vs)-1; i++ {
+		if vs[i] > vs[i+1] {
+			return false
+		}
+	}
+	return true
+}
+
+func countOccurrences(s []string, v string) int {
+	var c int
+	for _, i := range s {
+		if i == v {
+			c++
+		}
+	}
+	return c
 }

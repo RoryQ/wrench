@@ -60,6 +60,8 @@ const (
 	StatementKindDDL            StatementKind = "DDL"
 	StatementKindDML            StatementKind = "DML"
 	StatementKindPartitionedDML StatementKind = "PartitionedDML"
+
+	MigrationKindFixedPointIterationDML MigrationKind = "MigrationKindFixedPointIterationDML"
 )
 
 type (
@@ -162,6 +164,14 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 		// Validate migration-scoped config against the migration.
 		if directives.MigrationKind != "" {
 			return nil, fmt.Errorf("%s: unimplemented: migration kind %s", f.Name(), directives.MigrationKind)
+			//switch directives.MigrationKind {
+			//case MigrationKindFixedPointIterationDML:
+			//	if statementKind != StatementKindDML {
+			//		return nil, fmt.Errorf("%s: migration kind %q is only supported for %s statements, got: %s", f.Name(), MigrationKindFixedPointIterationDML, StatementKindDML, directives.MigrationKind)
+			//	}
+			//default:
+			//	return nil, fmt.Errorf("%s: invalid migration kind %q", f.Name(), directives.MigrationKind)
+			//}
 		}
 
 		migrations = append(migrations, &Migration{

@@ -60,6 +60,8 @@ const (
 	StatementKindDDL            StatementKind = "DDL"
 	StatementKindDML            StatementKind = "DML"
 	StatementKindPartitionedDML StatementKind = "PartitionedDML"
+
+	MigrationKindFixedPointIterationDML MigrationKind = "FixedPointIterationDML"
 )
 
 type (
@@ -297,12 +299,15 @@ func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 		if !found {
 			return MigrationDirectives{}, fmt.Errorf("directive must be in format @wrench.{key}={value}, got: %s", line)
 		}
-
 		value, _, _ = strings.Cut(value, " ")
 
 		switch strings.TrimPrefix(key, directiveKeyPrefix) {
 		case migrationKindKey:
-			directives.MigrationKind = MigrationKind(value)
+			migrationKind := MigrationKind(value)
+			if migrationKind != MigrationKindFixedPointIterationDML {
+				return MigrationDirectives{}, fmt.Errorf("invalid migration kind %q", migrationKind)
+			}
+			directives.MigrationKind = migrationKind
 		case concurrencyKey:
 			concurrency, err := strconv.Atoi(value)
 			if err != nil {

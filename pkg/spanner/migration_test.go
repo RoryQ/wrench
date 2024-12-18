@@ -356,8 +356,6 @@ func Test_migrationFileRegex(t *testing.T) {
 }
 
 func Test_parseMigrationDirectives(t *testing.T) {
-	const migrationKindTest = MigrationKind("test")
-
 	tests := []struct {
 		name string
 		data string
@@ -385,9 +383,9 @@ SELECT 1 FROM Foo`,
  @wrench.migrationKind=%s
  @wrench.concurrency=123
 */
-SELECT 1 FROM Foo`, migrationKindTest),
+SELECT 1 FROM Foo`, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
-				MigrationKind: migrationKindTest,
+				MigrationKind: MigrationKindFixedPointIterationDML,
 				Concurrency:   123,
 			},
 		},
@@ -396,9 +394,9 @@ SELECT 1 FROM Foo`, migrationKindTest),
 			data: fmt.Sprintf(`
 -- @wrench.migrationKind=%s
 -- @wrench.concurrency=123
-SELECT 1 FROM Foo`, migrationKindTest),
+SELECT 1 FROM Foo`, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
-				MigrationKind: migrationKindTest,
+				MigrationKind: MigrationKindFixedPointIterationDML,
 				Concurrency:   123,
 			},
 		},
@@ -409,9 +407,9 @@ SELECT 1 FROM Foo`, migrationKindTest),
  @wrench.migrationKind=%s // This is ignored
 */
 SELECT 1 FROM Foo
-`, migrationKindTest),
+`, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
-				MigrationKind: migrationKindTest,
+				MigrationKind: MigrationKindFixedPointIterationDML,
 			},
 		},
 		{
@@ -420,9 +418,9 @@ SELECT 1 FROM Foo
 /*         @wrench.migrationKind=%s           */
 --         @wrench.concurrency=123           
 SELECT 1 FROM Foo
-`, migrationKindTest),
+`, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
-				MigrationKind: migrationKindTest,
+				MigrationKind: MigrationKindFixedPointIterationDML,
 				Concurrency:   123,
 			},
 		},
@@ -439,9 +437,9 @@ Foo bar baz.
 @wrench.concurrency=123
 */
 SELECT 1 FROM Foo
-`, migrationKindTest),
+`, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
-				MigrationKind: migrationKindTest,
+				MigrationKind: MigrationKindFixedPointIterationDML,
 				Concurrency:   123,
 			},
 		},
@@ -455,13 +453,24 @@ SELECT 1 FROM Foo
 	}
 
 	t.Run("Errors", func(t *testing.T) {
-		t.Run("InvalidConcurrency", func(t *testing.T) {
-			got, err := parseMigrationDirectives(`/*
+		t.Run("InvalidMigrationKind", func(t *testing.T) {
+			got, err := parseMigrationDirectives(fmt.Sprintf(`/*
 @wrench.migrationKind=foo
+@wrench.concurrency=123
+*/
+SELECT 1 FROM Foo
+`))
+			assert.Zero(t, got)
+			assert.Error(t, err)
+		})
+
+		t.Run("InvalidConcurrency", func(t *testing.T) {
+			got, err := parseMigrationDirectives(fmt.Sprintf(`/*
+@wrench.migrationKind=%s
 @wrench.concurrency=abc
 */
 SELECT 1 FROM Foo
-`)
+`, MigrationKindFixedPointIterationDML))
 			assert.Zero(t, got)
 			assert.Error(t, err)
 		})

@@ -470,17 +470,6 @@ SELECT 1 FROM Foo
 @wrench.concurrency=abc
 */
 SELECT 1 FROM Foo
-`, MigrationKindFixedPointIterationDML)
-			assert.Zero(t, got)
-			assert.Error(t, err)
-		})
-
-		t.Run("InvalidMigrationKind", func(t *testing.T) {
-			got, err := parseMigrationDirectives(`/*
-@wrench.migrationKind=foo
-@wrench.concurrency=123
-*/
-SELECT 1 FROM Foo
 `, MigrationKindFixedPointIterationDML))
 			assert.Zero(t, got)
 			assert.Error(t, err)

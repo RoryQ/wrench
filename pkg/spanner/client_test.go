@@ -240,22 +240,28 @@ func TestExecuteMigrations(t *testing.T) {
 	ensureMigrationVersionRecord(t, ctx, client, 2, false)
 	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
 
+	// execute remaining migrations
 	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
 	if want, got := int64(1), migrationsOutput["000003.sql"].RowsAffected; want != got {
-		t.Errorf("want %d, but got %d", want, got)
+		t.Errorf("migration %q: want %d rows affected, but got %d", "000003.sql", want, got)
 	}
 
-	// ensure that 000003.sql and 000004.sql have been applied.
+	// ensure that 000003.sql, 000004.sql, and 000005.sql have been applied.
 	ensureMigrationColumn(t, ctx, client, "LastName", "STRING(MAX)", "NO")
-	ensureMigrationVersionRecord(t, ctx, client, 4, false)
-	ensureMigrationHistoryRecord(t, ctx, client, 4, false)
+	ensureMigrationVersionRecord(t, ctx, client, 5, false)
+	ensureMigrationHistoryRecord(t, ctx, client, 5, false)
 
 	// ensure that schema is not changed and ExecuteMigrate is safely finished even though no migrations should be applied.
 	ensureMigrationColumn(t, ctx, client, "LastName", "STRING(MAX)", "NO")
-	ensureMigrationVersionRecord(t, ctx, client, 4, false)
+	ensureMigrationVersionRecord(t, ctx, client, 5, false)
+
+	// ensure that 000005.sql has been applied, inserting an additional 4 rows
+	if want, got := int64(4), migrationsOutput["000005.sql"].RowsAffected; want != got {
+		t.Errorf("migration %q: want %d rows affected, but got %d", "000005.sql", want, got)
+	}
 }
 
 func ensureMigrationColumn(t *testing.T, ctx context.Context, client *Client, columnName, spannerType, isNullable string) {

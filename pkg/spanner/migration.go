@@ -61,6 +61,10 @@ const (
 	StatementKindDML            StatementKind = "DML"
 	StatementKindPartitionedDML StatementKind = "PartitionedDML"
 
+	// MigrationKindFixedPointIterationDML repeatedly executes all statements in
+	// the migration until no more rows are affected. Each statement is executed
+	// in its own transaction, and the concurrency can be configured via the
+	// @wrench.concurrency directive.
 	MigrationKindFixedPointIterationDML MigrationKind = "FixedPointIterationDML"
 )
 
@@ -150,7 +154,7 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 		}
 
 		statements := toStatements(file)
-		kind, err := inspectStatementsKind(statements, detectPartitionedDML)
+		statementKind, err := inspectStatementsKind(statements, detectPartitionedDML)
 		if err != nil {
 			return nil, err
 		}
@@ -161,17 +165,9 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 			return nil, err
 		}
 
-		// Validate migration-scoped config against the migration.
-		if directives.MigrationKind != "" {
-			return nil, fmt.Errorf("%s: unimplemented: migration kind %s", f.Name(), directives.MigrationKind)
-			//switch directives.MigrationKind {
-			//case MigrationKindFixedPointIterationDML:
-			//	if statementKind != StatementKindDML {
-			//		return nil, fmt.Errorf("%s: migration kind %q is only supported for %s statements, got: %s", f.Name(), MigrationKindFixedPointIterationDML, StatementKindDML, directives.MigrationKind)
-			//	}
-			//default:
-			//	return nil, fmt.Errorf("%s: invalid migration kind %q", f.Name(), directives.MigrationKind)
-			//}
+		// Validate migration config against the migration.
+		if directives.MigrationKind == MigrationKindFixedPointIterationDML && statementKind != StatementKindDML {
+			return nil, fmt.Errorf("%s: migration kind %q is only supported for %s statements, got: %s", f.Name(), directives.MigrationKind, StatementKindDML, statementKind)
 		}
 
 		migrations = append(migrations, &Migration{
@@ -179,7 +175,7 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 			Name:       matches[2],
 			FileName:   f.Name(),
 			Statements: statements,
-			Kind:       kind,
+			Kind:       statementKind,
 			Directives: directives,
 		})
 	}

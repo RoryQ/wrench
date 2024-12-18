@@ -209,75 +209,6 @@ func Test_inspectStatementsKind(t *testing.T) {
 	}
 }
 
-func Test_stripStatement(t *testing.T) {
-	tests := []struct {
-		name      string
-		statement string
-		want      string
-	}{
-		{
-			name: "Basic single line comment is removed",
-			statement: `-- THIS SHOULD BE REMOVED
-CREATE TABLE Singers (
-  SingerID STRING(36) NOT NULL,
-  FirstName STRING(1024),
-) PRIMARY KEY(SingerID)`,
-			want: `CREATE TABLE Singers (
-  SingerID STRING(36) NOT NULL,
-  FirstName STRING(1024),
-) PRIMARY KEY(SingerID)`,
-		},
-		{
-			name: "Maligned single line comment is removed",
-			statement: `  -- THIS SHOULD BE REMOVED
-CREATE TABLE Singers (
-  SingerID STRING(36) NOT NULL,
-  FirstName STRING(1024),
-) PRIMARY KEY(SingerID)`,
-			want: `CREATE TABLE Singers (
-  SingerID STRING(36) NOT NULL,
-  FirstName STRING(1024),
-) PRIMARY KEY(SingerID)`,
-		},
-		//		{
-		//			name: "Single line comment after SQL is removed",
-		//			statement: `CREATE TABLE SchemaMigrations (
-		//  Version INT64 NOT NULL,
-		//  Dirty BOOL NOT NULL, -- THIS SHOULD BE REMOVED
-		// ) PRIMARY KEY(Version)`,
-		//			want: `CREATE TABLE SchemaMigrations (
-		//  Version INT64 NOT NULL,
-		//  Dirty BOOL NOT NULL,
-		// ) PRIMARY KEY(Version)`,
-		//		},
-		//		{
-		//			name: "Double quoted comment remains",
-		//			statement: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, "first name
-		// -- THIS STAYS IN DOUBLE QUOTES
-		// ")`,
-		//			want: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, "first name
-		// -- THIS STAYS IN DOUBLE QUOTES
-		// ")`,
-		//		},
-		//		{
-		//			name: "Single quoted comment remains",
-		//			statement: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, 'first name
-		// -- THIS STAYS IN DOUBLE QUOTES
-		// ')`,
-		//			want: `INSERT INTO Singers(SingerID, FirstName) VALUES(1, 'first name
-		// -- THIS STAYS IN DOUBLE QUOTES
-		// ')`,
-		//		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := stripStatement(tt.statement); got != tt.want {
-				t.Errorf("stripStatement() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func Test_isPartitionedDMLOnly(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -351,5 +282,352 @@ func Test_migrationFileRegex(t *testing.T) {
 			matches := migrationFileRegex.FindStringSubmatch(tc.input)
 			assert.Equal(t, tc.expected, matches)
 		})
+	}
+}
+
+func TestRemoveCommentsAndTrim(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			input: ``,
+			want:  ``,
+		},
+		{
+			input: `SELECT 1;`,
+			want:  `SELECT 1`,
+		},
+		{
+			input: `-- This is a single line comment
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `# This is a single line comment
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/* This is a multi line comment on one line */
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/* This
+is
+a
+multiline
+comment
+*/
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/* This
+* is
+* a
+* multiline
+* comment
+*/
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/** This is a javadoc style comment on one line */
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/** This
+is
+a
+javadoc
+style
+comment
+on
+multiple
+lines
+*/
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/** This
+* is
+* a
+* javadoc
+* style
+* comment
+* on
+* multiple
+* lines
+*/
+SELECT 1;`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `-- First comment
+SELECT--second comment
+1`,
+			want: `SELECT
+1`,
+		},
+		{
+			input: `# First comment
+SELECT#second comment
+1`,
+			want: `SELECT
+1`,
+		},
+		{
+			input: `-- First comment
+SELECT--second comment
+1--third comment`,
+			want: `SELECT
+1`,
+		},
+		{
+			input: `# First comment
+SELECT#second comment
+1#third comment`,
+			want: `SELECT
+1`,
+		},
+		{
+			input: `/* First comment */
+SELECT/* second comment */
+1`,
+			want: `SELECT
+1`,
+		},
+		{
+			input: `/* First comment */
+SELECT/* second comment */
+1/* third comment */`,
+			want: `SELECT
+1`,
+		},
+		{
+			input: `SELECT "TEST -- This is not a comment"`,
+			want:  `SELECT "TEST -- This is not a comment"`,
+		},
+		{
+			input: `-- This is a comment
+SELECT "TEST -- This is not a comment"`,
+			want: `SELECT "TEST -- This is not a comment"`,
+		},
+		{
+			input: `-- This is a comment
+SELECT "TEST -- This is not a comment" -- This is a comment`,
+			want: `SELECT "TEST -- This is not a comment"`,
+		},
+		{
+			input: `SELECT "TEST # This is not a comment"`,
+			want:  `SELECT "TEST # This is not a comment"`,
+		},
+		{
+			input: `# This is a comment
+SELECT "TEST # This is not a comment"`,
+			want: `SELECT "TEST # This is not a comment"`,
+		},
+		{
+			input: `# This is a comment
+SELECT "TEST # This is not a comment" # This is a comment`,
+			want: `SELECT "TEST # This is not a comment"`,
+		},
+		{
+			input: `SELECT "TEST /* This is not a comment */"`,
+			want:  `SELECT "TEST /* This is not a comment */"`,
+		},
+		{
+			input: `/* This is a comment */
+SELECT "TEST /* This is not a comment */"`,
+			want: `SELECT "TEST /* This is not a comment */"`,
+		},
+		{
+			input: `/* This is a comment */
+SELECT "TEST /* This is not a comment */" /* This is a comment */`,
+			want: `SELECT "TEST /* This is not a comment */"`,
+		},
+		{
+			input: `SELECT 'TEST -- This is not a comment'`,
+			want:  `SELECT 'TEST -- This is not a comment'`,
+		},
+		{
+			input: `-- This is a comment
+SELECT 'TEST -- This is not a comment'`,
+			want: `SELECT 'TEST -- This is not a comment'`,
+		},
+		{
+			input: `-- This is a comment
+SELECT 'TEST -- This is not a comment' -- This is a comment`,
+			want: `SELECT 'TEST -- This is not a comment'`,
+		},
+		{
+			input: `SELECT 'TEST # This is not a comment'`,
+			want:  `SELECT 'TEST # This is not a comment'`,
+		},
+		{
+			input: `# This is a comment
+SELECT 'TEST # This is not a comment'`,
+			want: `SELECT 'TEST # This is not a comment'`,
+		},
+		{
+			input: `# This is a comment
+SELECT 'TEST # This is not a comment' # This is a comment`,
+			want: `SELECT 'TEST # This is not a comment'`,
+		},
+		{
+			input: `SELECT 'TEST /* This is not a comment */'`,
+			want:  `SELECT 'TEST /* This is not a comment */'`,
+		},
+		{
+			input: `/* This is a comment */
+SELECT 'TEST /* This is not a comment */'`,
+			want: `SELECT 'TEST /* This is not a comment */'`,
+		},
+		{
+			input: `/* This is a comment */
+SELECT 'TEST /* This is not a comment */' /* This is a comment */`,
+			want: `SELECT 'TEST /* This is not a comment */'`,
+		},
+		{
+			input: `SELECT '''TEST
+-- This is not a comment
+'''`,
+			want: `SELECT '''TEST
+-- This is not a comment
+'''`,
+		},
+		{
+			input: ` -- This is a comment
+SELECT '''TEST
+-- This is not a comment
+''' -- This is a comment`,
+			want: `SELECT '''TEST
+-- This is not a comment
+'''`,
+		},
+		{
+			input: `SELECT '''TEST
+# This is not a comment
+'''`,
+			want: `SELECT '''TEST
+# This is not a comment
+'''`,
+		},
+		{
+			input: ` # This is a comment
+SELECT '''TEST
+# This is not a comment
+''' # This is a comment`,
+			want: `SELECT '''TEST
+# This is not a comment
+'''`,
+		},
+		{
+			input: `SELECT '''TEST
+/* This is not a comment */
+'''`,
+			want: `SELECT '''TEST
+/* This is not a comment */
+'''`,
+		},
+		{
+			input: ` /* This is a comment */
+SELECT '''TEST
+/* This is not a comment */
+''' /* This is a comment */`,
+			want: `SELECT '''TEST
+/* This is not a comment */
+'''`,
+		},
+		{
+			input: `SELECT """TEST
+-- This is not a comment
+"""`,
+			want: `SELECT """TEST
+-- This is not a comment
+"""`,
+		},
+		{
+			input: ` -- This is a comment
+SELECT """TEST
+-- This is not a comment
+""" -- This is a comment`,
+			want: `SELECT """TEST
+-- This is not a comment
+"""`,
+		},
+		{
+			input: `SELECT """TEST
+# This is not a comment
+"""`,
+			want: `SELECT """TEST
+# This is not a comment
+"""`,
+		},
+		{
+			input: ` # This is a comment
+SELECT """TEST
+# This is not a comment
+""" # This is a comment`,
+			want: `SELECT """TEST
+# This is not a comment
+"""`,
+		},
+		{
+			input: `SELECT """TEST
+/* This is not a comment */
+"""`,
+			want: `SELECT """TEST
+/* This is not a comment */
+"""`,
+		},
+		{
+			input: ` /* This is a comment */
+SELECT """TEST
+/* This is not a comment */
+""" /* This is a comment */`,
+			want: `SELECT """TEST
+/* This is not a comment */
+"""`,
+		},
+		{
+			input: `/* This is a comment /* this is still a comment */
+SELECT 1`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/** This is a javadoc style comment /* this is still a comment */
+SELECT 1`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/** This is a javadoc style comment /** this is still a comment */
+SELECT 1`,
+			want: `SELECT 1`,
+		},
+		{
+			input: `/** This is a javadoc style comment /** this is still a comment **/
+SELECT 1`,
+			want: `SELECT 1`,
+		},
+	}
+	for _, tc := range tests {
+		got, err := removeCommentsAndTrim(tc.input)
+		if err != nil && !tc.wantErr {
+			t.Error(err)
+			continue
+		}
+		if tc.wantErr {
+			t.Errorf("missing expected error for %q", tc.input)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("removeCommentsAndTrim result mismatch\nGot: %q\nWant: %q", got, tc.want)
+		}
 	}
 }

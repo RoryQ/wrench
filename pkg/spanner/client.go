@@ -124,7 +124,13 @@ func NewClient(ctx context.Context, config *Config) (*Client, error) {
 }
 
 func (c *Client) CreateDatabase(ctx context.Context, ddl []byte) error {
-	statements := toStatements(ddl)
+	statements, err := toStatements(ddl)
+	if err != nil {
+		return &Error{
+			Code: ErrorCodeCreateDatabase,
+			err:  err,
+		}
+	}
 
 	createReq := &databasepb.CreateDatabaseRequest{
 		Parent:          fmt.Sprintf("projects/%s/instances/%s", c.config.Project, c.config.Instance),
@@ -377,7 +383,11 @@ func (c *Client) staticDataQuery(ctx context.Context, table, customOrderBy strin
 }
 
 func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte) error {
-	return c.ApplyDDL(ctx, toStatements(ddl))
+	statements, err := toStatements(ddl)
+	if err != nil {
+		return err
+	}
+	return c.ApplyDDL(ctx, statements)
 }
 
 func (c *Client) ApplyDDL(ctx context.Context, statements []string) error {
@@ -406,7 +416,10 @@ func (c *Client) ApplyDDL(ctx context.Context, statements []string) error {
 }
 
 func (c *Client) ApplyDMLFile(ctx context.Context, dml []byte, partitioned bool, concurrency int) (int64, error) {
-	statements := toStatements(dml)
+	statements, err := toStatements(dml)
+	if err != nil {
+		return 0, err
+	}
 
 	if partitioned {
 		return c.ApplyPartitionedDML(ctx, statements, concurrency)

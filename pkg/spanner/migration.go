@@ -29,6 +29,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/roryq/wrench/pkg/xregexp"
 )
 
 const (
@@ -284,50 +286,46 @@ func isDMLAny(statement string) bool {
 // @wrench.{key}={value} from the migration preamble.
 func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 	const (
-		directiveKeyPrefix = "@wrench."
-		migrationKindKey   = "migrationKind"
-		concurrencyKey     = "concurrency"
+		migrationKindKey = "MigrationKind"
+		concurrencyKey   = "Concurrency"
 	)
 
+	// matches a migration directive in the format @wrench.{key}={value}
+	directiveRegex := regexp.MustCompile(`(?m)^\s*@wrench[.](?P<Key>\w+)=(?P<Value>\w+)`)
+	directiveMatches, _ := xregexp.FindAllMatchGroups(directiveRegex, extractPreamble(migration))
+
 	var directives MigrationDirectives
-	for _, line := range extractPreamble(migration) {
-		if !strings.HasPrefix(line, directiveKeyPrefix) {
-			continue
-		}
-
-		key, value, found := strings.Cut(line, "=")
-		if !found {
-			return MigrationDirectives{}, fmt.Errorf("directive must be in format @wrench.{key}={value}, got: %s", line)
-		}
-		value, _, _ = strings.Cut(value, " ")
-
-		switch strings.TrimPrefix(key, directiveKeyPrefix) {
+	for _, match := range directiveMatches {
+		key, val := match["Key"], match["Value"]
+		switch key {
 		case migrationKindKey:
-			migrationKind := MigrationKind(value)
+			migrationKind := MigrationKind(val)
 			if migrationKind != MigrationKindFixedPointIterationDML {
 				return MigrationDirectives{}, fmt.Errorf("invalid migration kind %q", migrationKind)
 			}
 			directives.MigrationKind = migrationKind
 		case concurrencyKey:
-			concurrency, err := strconv.Atoi(value)
+			concurrency, err := strconv.Atoi(val)
 			if err != nil {
-				return MigrationDirectives{}, fmt.Errorf("invalid concurrency value %q", value)
+				return MigrationDirectives{}, fmt.Errorf("invalid concurrency value %q", val)
 			}
 			directives.Concurrency = concurrency
 		default:
-			return MigrationDirectives{}, fmt.Errorf("unsupported directive: %s", key)
+			return directives, fmt.Errorf("unknown migration directive: %s", key)
 		}
 	}
+
 	return directives, nil
 }
 
 // extractPreamble returns all comments from the start of a migration file,
 // until the first non-empty non-comment line is encountered.
-func extractPreamble(migration string) []string {
+func extractPreamble(migration string) string {
 	const (
-		blockCommentStart = "/*"
-		blockCommentEnd   = "*/"
-		lineCommentPrefix = "--"
+		blockCommentStart    = "/*"
+		blockCommentEnd      = "*/"
+		lineCommentPrefix    = "--"
+		lineCommentAltPrefix = "#"
 	)
 
 	var comments []string
@@ -346,6 +344,8 @@ func extractPreamble(migration string) []string {
 				_, line, _ = strings.Cut(line, blockCommentStart)
 			} else if strings.HasPrefix(line, lineCommentPrefix) {
 				line = strings.TrimPrefix(line, lineCommentPrefix)
+			} else if strings.HasPrefix(line, lineCommentAltPrefix) {
+				line = strings.TrimPrefix(line, lineCommentAltPrefix)
 			} else {
 				// Not in a block comment or line comment, and the line is not
 				// empty. Preamble is over.
@@ -364,5 +364,5 @@ func extractPreamble(migration string) []string {
 			comments = append(comments, line)
 		}
 	}
-	return comments
+	return strings.Join(comments, "\n")
 }

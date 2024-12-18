@@ -380,8 +380,8 @@ SELECT 1 FROM Foo`,
 			name: "PreambleWithDirectives_BlockComment",
 			data: fmt.Sprintf(`
 /*
- @wrench.migrationKind=%s
- @wrench.concurrency=123
+ @wrench.MigrationKind=%s
+ @wrench.Concurrency=123
 */
 SELECT 1 FROM Foo`, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
@@ -392,8 +392,8 @@ SELECT 1 FROM Foo`, MigrationKindFixedPointIterationDML),
 		{
 			name: "PreambleWithDirectives_LineComment",
 			data: fmt.Sprintf(`
--- @wrench.migrationKind=%s
--- @wrench.concurrency=123
+-- @wrench.MigrationKind=%s
+-- @wrench.Concurrency=123
 SELECT 1 FROM Foo`, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
 				MigrationKind: MigrationKindFixedPointIterationDML,
@@ -404,7 +404,7 @@ SELECT 1 FROM Foo`, MigrationKindFixedPointIterationDML),
 			name: "PreambleWithDirectives_DirectiveCommentIgnored",
 			data: fmt.Sprintf(`
 /*
- @wrench.migrationKind=%s // This is ignored
+ @wrench.MigrationKind=%s // This is ignored
 */
 SELECT 1 FROM Foo
 `, MigrationKindFixedPointIterationDML),
@@ -415,8 +415,8 @@ SELECT 1 FROM Foo
 		{
 			name: "WhitespaceIgnored",
 			data: fmt.Sprintf(`
-/*         @wrench.migrationKind=%s           */
---         @wrench.concurrency=123           
+/*         @wrench.MigrationKind=%s           */
+--         @wrench.Concurrency=123           
 SELECT 1 FROM Foo
 `, MigrationKindFixedPointIterationDML),
 			want: MigrationDirectives{
@@ -430,11 +430,11 @@ SELECT 1 FROM Foo
 /*
 This is my migration!
 
-@wrench.migrationKind=%s
+@wrench.MigrationKind=%s
 
 Foo bar baz.
 
-@wrench.concurrency=123
+@wrench.Concurrency=123
 */
 SELECT 1 FROM Foo
 `, MigrationKindFixedPointIterationDML),
@@ -455,8 +455,8 @@ SELECT 1 FROM Foo
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("InvalidMigrationKind", func(t *testing.T) {
 			got, err := parseMigrationDirectives(`/*
-@wrench.migrationKind=foo
-@wrench.concurrency=123
+@wrench.MigrationKind=foo
+@wrench.Concurrency=123
 */
 SELECT 1 FROM Foo
 `)
@@ -466,8 +466,8 @@ SELECT 1 FROM Foo
 
 		t.Run("InvalidConcurrency", func(t *testing.T) {
 			got, err := parseMigrationDirectives(fmt.Sprintf(`/*
-@wrench.migrationKind=%s
-@wrench.concurrency=abc
+@wrench.MigrationKind=%s
+@wrench.Concurrency=abc
 */
 SELECT 1 FROM Foo
 `, MigrationKindFixedPointIterationDML))
@@ -490,12 +490,12 @@ func Test_extractPreamble(t *testing.T) {
 	tests := []struct {
 		name string
 		data string
-		want []string
+		want string
 	}{
 		{
 			name: "NoPreamble",
 			data: "SELECT 1 FROM Foo",
-			want: nil,
+			want: "",
 		},
 		{
 			name: "BlockPreamble",
@@ -505,7 +505,8 @@ func Test_extractPreamble(t *testing.T) {
  preamble
 */
 SELECT 1 FROM Foo`,
-			want: []string{"this is my", "preamble"},
+			want: `this is my
+preamble`,
 		},
 		{
 			name: "InlineBlockDelimiters",
@@ -513,14 +514,15 @@ SELECT 1 FROM Foo`,
 /* this is my
  preamble */
 SELECT 1 FROM Foo`,
-			want: []string{"this is my", "preamble"},
+			want: `this is my
+preamble`,
 		},
 		{
 			name: "SingleLineBlockComment",
 			data: `
 /* this is my preamble */
 SELECT 1 FROM Foo`,
-			want: []string{"this is my preamble"},
+			want: `this is my preamble`,
 		},
 		{
 			name: "LineCommentPreamble",
@@ -528,7 +530,17 @@ SELECT 1 FROM Foo`,
 -- this is my
 -- preamble
 SELECT 1 FROM Foo`,
-			want: []string{"this is my", "preamble"},
+			want: `this is my
+preamble`,
+		},
+		{
+			name: "HashLineCommentPreamble",
+			data: `
+# this is my
+# preamble
+SELECT 1 FROM Foo`,
+			want: `this is my
+preamble`,
 		},
 		{
 			name: "IgnoresNonPreambleLineComments",
@@ -537,7 +549,8 @@ SELECT 1 FROM Foo`,
 -- preamble
 SELECT 1 FROM Foo -- this is not preamble
  -- this is also not preamble`,
-			want: []string{"this is my", "preamble"},
+			want: `this is my
+preamble`,
 		},
 		{
 			name: "IgnoresNonPreambleBlockComments",
@@ -545,7 +558,7 @@ SELECT 1 FROM Foo -- this is not preamble
 /* this is my preamble */
 SELECT 1 FROM Foo /* this is not preamble */
 /* this is not preamble */`,
-			want: []string{"this is my preamble"},
+			want: `this is my preamble`,
 		},
 		{
 			name: "ExtractsPreambleAcrossMultipleBlocks",
@@ -557,8 +570,9 @@ SELECT 1 FROM Foo /* this is not preamble */
 /*block 3*/
 SELECT 1 FROM Foo
 /* this is not preamble */`,
-			want: []string{"block 1", "block 2", "block 3"},
-		},
+			want: `block 1
+block 2
+block 3`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

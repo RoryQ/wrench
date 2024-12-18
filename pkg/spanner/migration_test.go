@@ -453,8 +453,19 @@ SELECT 1 FROM Foo
 	}
 
 	t.Run("Errors", func(t *testing.T) {
-		t.Run("InvalidConcurrency", func(t *testing.T) {
+		t.Run("InvalidMigrationKind", func(t *testing.T) {
 			got, err := parseMigrationDirectives(`/*
+@wrench.migrationKind=foo
+@wrench.concurrency=123
+*/
+SELECT 1 FROM Foo
+`)
+			assert.Zero(t, got)
+			assert.Error(t, err)
+		})
+
+		t.Run("InvalidConcurrency", func(t *testing.T) {
+			got, err := parseMigrationDirectives(fmt.Sprintf(`/*
 @wrench.migrationKind=%s
 @wrench.concurrency=abc
 */
@@ -470,7 +481,7 @@ SELECT 1 FROM Foo
 @wrench.concurrency=123
 */
 SELECT 1 FROM Foo
-`)
+`, MigrationKindFixedPointIterationDML))
 			assert.Zero(t, got)
 			assert.Error(t, err)
 		})

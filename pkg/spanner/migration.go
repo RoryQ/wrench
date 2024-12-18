@@ -284,6 +284,7 @@ func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 	const (
 		directiveKeyPrefix = "@wrench."
 		migrationKindKey   = "migrationKind"
+		concurrencyKey     = "concurrency"
 	)
 
 	var directives MigrationDirectives
@@ -302,6 +303,12 @@ func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 		switch strings.TrimPrefix(key, directiveKeyPrefix) {
 		case migrationKindKey:
 			directives.MigrationKind = MigrationKind(value)
+		case concurrencyKey:
+			concurrency, err := strconv.Atoi(value)
+			if err != nil {
+				return MigrationDirectives{}, fmt.Errorf("invalid concurrency value %q", value)
+			}
+			directives.Concurrency = concurrency
 		default:
 			return MigrationDirectives{}, fmt.Errorf("unsupported directive: %s", key)
 		}

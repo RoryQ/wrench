@@ -40,8 +40,8 @@ func TestLoadMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(ms) != 3 {
-		t.Fatalf("migrations length want 3, but got %v", len(ms))
+	if len(ms) != 4 {
+		t.Fatalf("migrations length want 4, but got %v", len(ms))
 	}
 
 	testcases := []struct {
@@ -73,7 +73,7 @@ func TestLoadMigrations(t *testing.T) {
 }
 
 func TestLoadMigrationsSkipVersion(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3}, false)
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3, 4}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +82,8 @@ func TestLoadMigrationsSkipVersion(t *testing.T) {
 		t.Fatalf("migrations length want 1, but got %v", len(ms))
 	}
 
-	if ms[0].Version != 4 {
-		t.Errorf("version want %v, but got %v", 4, ms[0].Version)
+	if ms[0].Version != 5 {
+		t.Errorf("version want %v, but got %v", 5, ms[0].Version)
 	}
 }
 

@@ -759,7 +759,7 @@ func TestClient_RepairMigration(t *testing.T) {
 	defer done()
 
 	// add LastName NULLABLE
-	err := migrateUpDir(t, ctx, client, "testdata/migrations", 3, 4)
+	err := migrateUpDir(t, ctx, client, "testdata/migrations", 3, 4, 5)
 	require.NoError(t, err, "error running migrations")
 
 	// add row with NULL LastName
@@ -767,7 +767,7 @@ func TestClient_RepairMigration(t *testing.T) {
 	require.NoError(t, err, "failed to insert row")
 
 	// make dirty with bad migration
-	err = migrateUpDir(t, ctx, client, "testdata/migrations", 3)
+	err = migrateUpDir(t, ctx, client, "testdata/migrations", 3, 5)
 	assert.EqualError(t, err, "Cannot specify a null value for column: LastName in table: Singers referenced by key: {String(\"ABC\")}")
 
 	assertDirtyCount := func(isDirty bool, expected int64) {

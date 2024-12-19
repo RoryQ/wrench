@@ -33,8 +33,8 @@ import (
 	"cloud.google.com/go/spanner"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-  
-  "github.com/roryq/wrench/pkg/xregexp"
+
+	"github.com/roryq/wrench/pkg/xregexp"
 )
 
 const (
@@ -438,6 +438,6 @@ func extractPreamble(migration string) string {
 			comments = append(comments, line)
 		}
 	}
-  
+
 	return strings.Join(comments, "\n")
 }

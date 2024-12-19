@@ -33,6 +33,8 @@ import (
 	"cloud.google.com/go/spanner"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/roryq/wrench/pkg/xregexp"
 )
 
 const (
@@ -79,6 +81,14 @@ type (
 		Statements []string
 
 		Kind StatementKind
+
+		// Directives defines config scoped to a single migration.
+		Directives MigrationDirectives
+	}
+
+	// MigrationDirectives configures how the migration should be executed.
+	MigrationDirectives struct {
+		placeholder string
 	}
 
 	Migrations []*Migration
@@ -144,12 +154,19 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 			return nil, err
 		}
 
+		// Parse any migration-scoped directives for the migration
+		directives, err := parseMigrationDirectives(string(file))
+		if err != nil {
+			return nil, err
+		}
+
 		migrations = append(migrations, &Migration{
 			Version:    uint(version),
 			Name:       matches[2],
 			FileName:   f.Name(),
 			Statements: statements,
 			Kind:       kind,
+			Directives: directives,
 		})
 	}
 
@@ -346,4 +363,81 @@ func removeCommentsAndTrim(sql string) (string, error) {
 		return trimmed[:len(trimmed)-1], nil
 	}
 	return trimmed, nil
+}
+
+// parseMigrationDirectives extracts migration directives in the format
+// @wrench.{key}={value} from the migration preamble.
+func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
+	const (
+		// placeholderKey is a placeholder to validate parsing until a directive
+		// is implemented.
+		placeholderKey = "TODO"
+	)
+
+	// matches a migration directive in the format @wrench.{key}={value}
+	directiveRegex := regexp.MustCompile(`(?m)^\s*@wrench[.](?P<Key>\w+)=(?P<Value>\w+)`)
+	directiveMatches, _ := xregexp.FindAllMatchGroups(directiveRegex, extractPreamble(migration))
+
+	var directives MigrationDirectives
+	for _, match := range directiveMatches {
+		key, val := match["Key"], match["Value"]
+		switch key {
+		case placeholderKey:
+			directives.placeholder = val
+		default:
+			return directives, fmt.Errorf("unknown migration directive: %s", key)
+		}
+	}
+
+	return directives, nil
+}
+
+// extractPreamble returns all comments from the start of a migration file,
+// until the first non-empty non-comment line is encountered.
+func extractPreamble(migration string) string {
+	const (
+		blockCommentStart    = "/*"
+		blockCommentEnd      = "*/"
+		lineCommentPrefix    = "--"
+		lineCommentAltPrefix = "#"
+	)
+
+	var comments []string
+	var blockComment bool
+	for _, line := range strings.Split(migration, "\n") {
+		// Skip empty lines.
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Look for block or line comment start.
+		if !blockComment {
+			if strings.HasPrefix(line, blockCommentStart) {
+				blockComment = true
+				_, line, _ = strings.Cut(line, blockCommentStart)
+			} else if strings.HasPrefix(line, lineCommentPrefix) {
+				line = strings.TrimPrefix(line, lineCommentPrefix)
+			} else if strings.HasPrefix(line, lineCommentAltPrefix) {
+				line = strings.TrimPrefix(line, lineCommentAltPrefix)
+			} else {
+				// Not in a block comment or line comment, and the line is not
+				// empty. Preamble is over.
+				break
+			}
+		}
+
+		// Look for block comment exit.
+		if blockComment && strings.Contains(line, blockCommentEnd) {
+			line, _, _ = strings.Cut(line, blockCommentEnd)
+			blockComment = false
+		}
+
+		// Capture non-empty comment lines
+		if line = strings.TrimSpace(line); line != "" {
+			comments = append(comments, line)
+		}
+	}
+
+	return strings.Join(comments, "\n")
 }

@@ -20,6 +20,7 @@
 package spanner
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -630,4 +631,199 @@ SELECT 1`,
 			t.Errorf("removeCommentsAndTrim result mismatch\nGot: %q\nWant: %q", got, tc.want)
 		}
 	}
+}
+
+func Test_parseMigrationDirectives(t *testing.T) {
+	const placeholderKey = "TODO"
+
+	tests := []struct {
+		name string
+		data string
+		want MigrationDirectives
+	}{
+		{
+			name: "NoPreamble",
+			data: "SELECT 1 FROM Foo",
+			want: MigrationDirectives{},
+		},
+		{
+			name: "PreambleWithoutDirectives",
+			data: `
+/*
+ this is my
+ preamble
+*/
+SELECT 1 FROM Foo`,
+			want: MigrationDirectives{},
+		},
+		{
+			name: "PreambleWithDirectives_BlockComment",
+			data: fmt.Sprintf(`
+/*
+ @wrench.%s=%s
+*/
+SELECT 1 FROM Foo`, placeholderKey, "value"),
+			want: MigrationDirectives{
+				placeholder: "value",
+			},
+		},
+		{
+			name: "PreambleWithDirectives_LineComment",
+			data: fmt.Sprintf(`
+-- @wrench.%s=%s
+SELECT 1 FROM Foo`, placeholderKey, "value"),
+			want: MigrationDirectives{
+				placeholder: "value",
+			},
+		},
+		{
+			name: "PreambleWithDirectives_DirectiveCommentIgnored",
+			data: fmt.Sprintf(`
+/*
+ @wrench.%s=%s // This is ignored
+*/
+SELECT 1 FROM Foo`, placeholderKey, "value"),
+			want: MigrationDirectives{
+				placeholder: "value",
+			},
+		},
+		{
+			name: "WhitespaceIgnored",
+			data: fmt.Sprintf(`
+/*         @wrench.%s=%s           */
+SELECT 1 FROM Foo`, placeholderKey, "value"),
+			want: MigrationDirectives{
+				placeholder: "value",
+			},
+		},
+		{
+			name: "NonDirectivesIgnored",
+			data: fmt.Sprintf(`
+/*
+This is my migration!
+
+@wrench.%s=%s
+
+Foo bar baz.
+
+*/
+SELECT 1 FROM Foo`, placeholderKey, "value"),
+			want: MigrationDirectives{
+				placeholder: "value",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseMigrationDirectives(tt.data)
+			assert.Equal(t, tt.want, got)
+			assert.NoError(t, err)
+		})
+	}
+
+	t.Run("Errors", func(t *testing.T) {
+		t.Run("UnknownKey", func(t *testing.T) {
+			got, err := parseMigrationDirectives(`
+-- @wrench.foo=bar
+SELECT 1 FROM Foo
+`)
+			assert.Zero(t, got)
+			assert.Error(t, err)
+		})
+	})
+}
+
+func Test_extractPreamble(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "NoPreamble",
+			data: "SELECT 1 FROM Foo",
+			want: "",
+		},
+		{
+			name: "BlockPreamble",
+			data: `
+/*
+ this is my
+ preamble
+*/
+SELECT 1 FROM Foo`,
+			want: `this is my
+preamble`,
+		},
+		{
+			name: "InlineBlockDelimiters",
+			data: `
+/* this is my
+ preamble */
+SELECT 1 FROM Foo`,
+			want: `this is my
+preamble`,
+		},
+		{
+			name: "SingleLineBlockComment",
+			data: `
+/* this is my preamble */
+SELECT 1 FROM Foo`,
+			want: `this is my preamble`,
+		},
+		{
+			name: "LineCommentPreamble",
+			data: `
+-- this is my
+-- preamble
+SELECT 1 FROM Foo`,
+			want: `this is my
+preamble`,
+		},
+		{
+			name: "HashLineCommentPreamble",
+			data: `
+# this is my
+# preamble
+SELECT 1 FROM Foo`,
+			want: `this is my
+preamble`,
+		},
+		{
+			name: "IgnoresNonPreambleLineComments",
+			data: `
+-- this is my
+-- preamble
+SELECT 1 FROM Foo -- this is not preamble
+ -- this is also not preamble`,
+			want: `this is my
+preamble`,
+		},
+		{
+			name: "IgnoresNonPreambleBlockComments",
+			data: `
+/* this is my preamble */
+SELECT 1 FROM Foo /* this is not preamble */
+/* this is not preamble */`,
+			want: `this is my preamble`,
+		},
+		{
+			name: "ExtractsPreambleAcrossMultipleBlocks",
+			data: `
+/* 
+ block 1
+*/
+-- block 2
+/*block 3*/
+SELECT 1 FROM Foo
+/* this is not preamble */`,
+			want: `block 1
+block 2
+block 3`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractPreamble(tt.data))
+		})
+  }
 }

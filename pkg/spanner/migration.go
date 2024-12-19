@@ -29,6 +29,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"cloud.google.com/go/spanner"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -51,9 +55,6 @@ var (
 	// as it must be idempotent. This probably isn't solvable with more regexes.
 	// 2. UPDATE or DELETE statements with a SELECT statement in the WHERE clause is not fully partitionable.
 	notPartitionedDmlRegex = regexp.MustCompile(`(?is)(?:insert)|(?:update|delete).*select`)
-
-	// matches a single comment on its own line
-	oneLineSingleComment = regexp.MustCompile(`(?m)^\s*--.*$`)
 )
 
 const (
@@ -133,7 +134,11 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 			continue
 		}
 
-		statements := toStatements(file)
+		statements, err := toStatements(file)
+		if err != nil {
+			return nil, err
+		}
+
 		kind, err := inspectStatementsKind(statements, detectPartitionedDML)
 		if err != nil {
 			return nil, err
@@ -160,29 +165,20 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 	return migrations, nil
 }
 
-func stripComments(statement string) string {
-	return oneLineSingleComment.ReplaceAllString(statement, "")
-}
-
-func stripStatement(statement string) string {
-	return strings.TrimSpace(
-		stripComments(
-			strings.TrimSpace(
-				statement)))
-
-}
-
-func toStatements(file []byte) []string {
+func toStatements(file []byte) ([]string, error) {
 	contents := bytes.Split(file, []byte(statementsSeparator))
 
 	statements := make([]string, 0, len(contents))
 	for _, c := range contents {
-		if statement := stripStatement(string(c)); statement != "" {
+		statement, err := removeCommentsAndTrim(string(c))
+		if err != nil {
+			return nil, err
+		}
+		if statement != "" {
 			statements = append(statements, statement)
 		}
 	}
-
-	return statements
+	return statements, nil
 }
 
 func inspectStatementsKind(statements []string, detectPartitionedDML bool) (StatementKind, error) {
@@ -250,4 +246,104 @@ func isPartitionedDMLOnly(statement string) bool {
 
 func isDMLAny(statement string) bool {
 	return dmlAnyRegex.Match([]byte(statement))
+}
+
+// RemoveCommentsAndTrim removes any comments in the query string and trims any
+// spaces at the beginning and end of the query. This makes checking what type
+// of query a string is a lot easier, as only the first word(s) need to be
+// checked after this has been removed.
+//
+// This function is lifted directly from googleapis/go-sql-spanner.
+// https://github.com/googleapis/go-sql-spanner/blob/076c63111370017133f79dd37c0069f68f27d7df/statement_parser.go
+func removeCommentsAndTrim(sql string) (string, error) {
+	const singleQuote = '\''
+	const doubleQuote = '"'
+	const backtick = '`'
+	const hyphen = '-'
+	const dash = '#'
+	const slash = '/'
+	const asterisk = '*'
+	isInQuoted := false
+	isInSingleLineComment := false
+	isInMultiLineComment := false
+	var startQuote rune
+	lastCharWasEscapeChar := false
+	isTripleQuoted := false
+	res := strings.Builder{}
+	res.Grow(len(sql))
+	index := 0
+	runes := []rune(sql)
+	for index < len(runes) {
+		c := runes[index]
+		if isInQuoted {
+			if (c == '\n' || c == '\r') && !isTripleQuoted {
+				return "", spanner.ToSpannerError(status.Errorf(codes.InvalidArgument, "statement contains an unclosed literal: %s", sql))
+			} else if c == startQuote {
+				if lastCharWasEscapeChar {
+					lastCharWasEscapeChar = false
+				} else if isTripleQuoted {
+					if len(runes) > index+2 && runes[index+1] == startQuote && runes[index+2] == startQuote {
+						isInQuoted = false
+						startQuote = 0
+						isTripleQuoted = false
+						res.WriteRune(c)
+						res.WriteRune(c)
+						index += 2
+					}
+				} else {
+					isInQuoted = false
+					startQuote = 0
+				}
+			} else if c == '\\' {
+				lastCharWasEscapeChar = true
+			} else {
+				lastCharWasEscapeChar = false
+			}
+			res.WriteRune(c)
+		} else {
+			// We are not in a quoted string.
+			if isInSingleLineComment {
+				if c == '\n' {
+					isInSingleLineComment = false
+					// Include the line feed in the result.
+					res.WriteRune(c)
+				}
+			} else if isInMultiLineComment {
+				if len(runes) > index+1 && c == asterisk && runes[index+1] == slash {
+					isInMultiLineComment = false
+					index++
+				}
+			} else {
+				if c == dash || (len(runes) > index+1 && c == hyphen && runes[index+1] == hyphen) {
+					// This is a single line comment.
+					isInSingleLineComment = true
+				} else if len(runes) > index+1 && c == slash && runes[index+1] == asterisk {
+					isInMultiLineComment = true
+					index++
+				} else {
+					if c == singleQuote || c == doubleQuote || c == backtick {
+						isInQuoted = true
+						startQuote = c
+						// Check whether it is a triple-quote.
+						if len(runes) > index+2 && runes[index+1] == startQuote && runes[index+2] == startQuote {
+							isTripleQuoted = true
+							res.WriteRune(c)
+							res.WriteRune(c)
+							index += 2
+						}
+					}
+					res.WriteRune(c)
+				}
+			}
+		}
+		index++
+	}
+	if isInQuoted {
+		return "", spanner.ToSpannerError(status.Errorf(codes.InvalidArgument, "statement contains an unclosed literal: %s", sql))
+	}
+	trimmed := strings.TrimSpace(res.String())
+	if len(trimmed) > 0 && trimmed[len(trimmed)-1] == ';' {
+		return trimmed[:len(trimmed)-1], nil
+	}
+	return trimmed, nil
 }

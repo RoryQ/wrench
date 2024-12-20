@@ -40,8 +40,8 @@ func TestLoadMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(ms) != 3 {
-		t.Fatalf("migrations length want 3, but got %v", len(ms))
+	if len(ms) != 4 {
+		t.Fatalf("migrations length want 4, but got %v", len(ms))
 	}
 
 	testcases := []struct {
@@ -73,7 +73,7 @@ func TestLoadMigrations(t *testing.T) {
 }
 
 func TestLoadMigrationsSkipVersion(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3}, false)
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3, 4}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,8 +82,8 @@ func TestLoadMigrationsSkipVersion(t *testing.T) {
 		t.Fatalf("migrations length want 1, but got %v", len(ms))
 	}
 
-	if ms[0].Version != 4 {
-		t.Errorf("version want %v, but got %v", 4, ms[0].Version)
+	if ms[0].Version != 5 {
+		t.Errorf("version want %v, but got %v", 5, ms[0].Version)
 	}
 }
 
@@ -634,7 +634,7 @@ SELECT 1`,
 }
 
 func Test_parseMigrationDirectives(t *testing.T) {
-	const placeholderKey = "TODO"
+	const testStatementKind = StatementKind("Foo")
 
 	tests := []struct {
 		name string
@@ -660,40 +660,48 @@ SELECT 1 FROM Foo`,
 			name: "PreambleWithDirectives_BlockComment",
 			data: fmt.Sprintf(`
 /*
- @wrench.%s=%s
+ @wrench.StatementKind=%s
+ @wrench.Concurrency=123
 */
-SELECT 1 FROM Foo`, placeholderKey, "value"),
+SELECT 1 FROM Foo`, testStatementKind),
 			want: MigrationDirectives{
-				placeholder: "value",
+				StatementKind: testStatementKind,
+				Concurrency:   123,
 			},
 		},
 		{
 			name: "PreambleWithDirectives_LineComment",
 			data: fmt.Sprintf(`
--- @wrench.%s=%s
-SELECT 1 FROM Foo`, placeholderKey, "value"),
+-- @wrench.StatementKind=%s
+-- @wrench.Concurrency=123
+SELECT 1 FROM Foo`, testStatementKind),
 			want: MigrationDirectives{
-				placeholder: "value",
+				StatementKind: testStatementKind,
+				Concurrency:   123,
 			},
 		},
 		{
 			name: "PreambleWithDirectives_DirectiveCommentIgnored",
 			data: fmt.Sprintf(`
 /*
- @wrench.%s=%s // This is ignored
+ @wrench.StatementKind=%s // This is ignored
 */
-SELECT 1 FROM Foo`, placeholderKey, "value"),
+SELECT 1 FROM Foo
+`, testStatementKind),
 			want: MigrationDirectives{
-				placeholder: "value",
+				StatementKind: testStatementKind,
 			},
 		},
 		{
 			name: "WhitespaceIgnored",
 			data: fmt.Sprintf(`
-/*         @wrench.%s=%s           */
-SELECT 1 FROM Foo`, placeholderKey, "value"),
+/*         @wrench.StatementKind=%s           */
+--         @wrench.Concurrency=123           
+SELECT 1 FROM Foo
+`, testStatementKind),
 			want: MigrationDirectives{
-				placeholder: "value",
+				StatementKind: testStatementKind,
+				Concurrency:   123,
 			},
 		},
 		{
@@ -702,14 +710,17 @@ SELECT 1 FROM Foo`, placeholderKey, "value"),
 /*
 This is my migration!
 
-@wrench.%s=%s
+@wrench.StatementKind=%s
 
 Foo bar baz.
 
+@wrench.Concurrency=123
 */
-SELECT 1 FROM Foo`, placeholderKey, "value"),
+SELECT 1 FROM Foo
+`, testStatementKind),
 			want: MigrationDirectives{
-				placeholder: "value",
+				StatementKind: testStatementKind,
+				Concurrency:   123,
 			},
 		},
 	}
@@ -722,6 +733,17 @@ SELECT 1 FROM Foo`, placeholderKey, "value"),
 	}
 
 	t.Run("Errors", func(t *testing.T) {
+		t.Run("InvalidConcurrency", func(t *testing.T) {
+			got, err := parseMigrationDirectives(fmt.Sprintf(`/*
+@wrench.StatementKind=%s
+@wrench.Concurrency=abc
+*/
+SELECT 1 FROM Foo
+`, testStatementKind))
+			assert.Zero(t, got)
+			assert.Error(t, err)
+		})
+
 		t.Run("UnknownKey", func(t *testing.T) {
 			got, err := parseMigrationDirectives(`
 -- @wrench.foo=bar
@@ -825,5 +847,5 @@ block 3`},
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, extractPreamble(tt.data))
 		})
-  }
+	}
 }

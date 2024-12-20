@@ -20,10 +20,12 @@
 package spanner
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -238,22 +240,28 @@ func TestExecuteMigrations(t *testing.T) {
 	ensureMigrationVersionRecord(t, ctx, client, 2, false)
 	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
 
+	// execute remaining migrations
 	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
 	if want, got := int64(1), migrationsOutput["000003.sql"].RowsAffected; want != got {
-		t.Errorf("want %d, but got %d", want, got)
+		t.Errorf("migration %q: want %d rows affected, but got %d", "000003.sql", want, got)
 	}
 
-	// ensure that 000003.sql and 000004.sql have been applied.
+	// ensure that 000003.sql, 000004.sql, and 000005.sql have been applied.
 	ensureMigrationColumn(t, ctx, client, "LastName", "STRING(MAX)", "NO")
-	ensureMigrationVersionRecord(t, ctx, client, 4, false)
-	ensureMigrationHistoryRecord(t, ctx, client, 4, false)
+	ensureMigrationVersionRecord(t, ctx, client, 5, false)
+	ensureMigrationHistoryRecord(t, ctx, client, 5, false)
 
 	// ensure that schema is not changed and ExecuteMigrate is safely finished even though no migrations should be applied.
 	ensureMigrationColumn(t, ctx, client, "LastName", "STRING(MAX)", "NO")
-	ensureMigrationVersionRecord(t, ctx, client, 4, false)
+	ensureMigrationVersionRecord(t, ctx, client, 5, false)
+
+	// ensure that 000005.sql has been applied, inserting an additional 4 rows
+	if want, got := int64(4), migrationsOutput["000005.sql"].RowsAffected; want != got {
+		t.Errorf("migration %q: want %d rows affected, but got %d", "000005.sql", want, got)
+	}
 }
 
 func ensureMigrationColumn(t *testing.T, ctx context.Context, client *Client, columnName, spannerType, isNullable string) {
@@ -751,7 +759,7 @@ func TestClient_RepairMigration(t *testing.T) {
 	defer done()
 
 	// add LastName NULLABLE
-	err := migrateUpDir(t, ctx, client, "testdata/migrations", 3, 4)
+	err := migrateUpDir(t, ctx, client, "testdata/migrations", 3, 4, 5)
 	require.NoError(t, err, "error running migrations")
 
 	// add row with NULL LastName
@@ -759,7 +767,7 @@ func TestClient_RepairMigration(t *testing.T) {
 	require.NoError(t, err, "failed to insert row")
 
 	// make dirty with bad migration
-	err = migrateUpDir(t, ctx, client, "testdata/migrations", 3)
+	err = migrateUpDir(t, ctx, client, "testdata/migrations", 3, 5)
 	assert.EqualError(t, err, "Cannot specify a null value for column: LastName in table: Singers referenced by key: {String(\"ABC\")}")
 
 	assertDirtyCount := func(isDirty bool, expected int64) {
@@ -914,4 +922,103 @@ func Test_parseDDL1(t *testing.T) {
 			assert.Equalf(t, tt.wantDdl, gotDdl, "parseDDL(%v)", tt.statement)
 		})
 	}
+}
+
+func Test_convergentApply(t *testing.T) {
+	// create a new "apply" function that executes each statement 11 times, the
+	// first 10 times returning 100 rows and the 11th time returning 0 rows.
+	newApplyFunc := func(t *testing.T) (func(context.Context, []string) (int64, error), *[]string) {
+		var callHistory []string
+		var mu sync.Mutex
+		applyFn := func(_ context.Context, s []string) (int64, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, s, 1)
+			callHistory = append(callHistory, s[0])
+
+			if countOccurrences(callHistory, s[0]) > 10 {
+				return 0, nil
+			}
+
+			// Return a static 100 "rows affected" per call the first 10 times
+			return 100, nil
+		}
+		return applyFn, &callHistory
+	}
+
+	t.Run("CallsEachStatementUntilNoRowsUpdated", func(t *testing.T) {
+		applyFn, callHistory := newApplyFunc(t)
+
+		stmts := []string{"stmt1", "stmt2", "stmt3"}
+		got, err := convergentApply(context.Background(), applyFn, stmts, 1)
+		require.NoError(t, err)
+
+		// Total number of rows should equal the number of times each statement was called
+		expectedRowCount := 3000 // 3 statements * (10 calls * 100 row count + 1 call * 0 row count)
+		assert.EqualValues(t, expectedRowCount, got)
+
+		// Validate that each statement was called the expected number of times
+		for _, stmt := range stmts {
+			assert.Equal(t, 11, countOccurrences(*callHistory, stmt))
+		}
+
+		// Validate that calls were ordered with concurrency = 1
+		assertOrdered(t, *callHistory)
+	})
+
+	t.Run("Concurrency>1", func(t *testing.T) {
+		applyFn, callHistory := newApplyFunc(t)
+
+		stmts := []string{"stmt1", "stmt2", "stmt3", "stmt4", "stmt5", "stmt6"}
+		got, err := convergentApply(context.Background(), applyFn, stmts, 10)
+		require.NoError(t, err)
+
+		// Total number of rows should equal the number of times each statement was called
+		expectedRowCount := 6000 // 6 statements * (10 calls * 100 row count + 1 call * 0 row count)
+		assert.EqualValues(t, expectedRowCount, got)
+
+		// Validate that each statement was called the expected number of times
+		for _, stmt := range stmts {
+			assert.Equal(t, 11, countOccurrences(*callHistory, stmt))
+		}
+
+		// Validate that calls were unordered with concurrency > 1
+		assertNotOrdered(t, *callHistory)
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		applyFn := func(_ context.Context, s []string) (int64, error) {
+			return 0, assert.AnError
+		}
+		got, err := convergentApply(context.Background(), applyFn, []string{"stmt1", "stmt2", "stmt3"}, 1)
+		require.ErrorIs(t, err, assert.AnError)
+		assert.Zero(t, got)
+	})
+}
+
+func assertOrdered[T cmp.Ordered](t *testing.T, vs []T) {
+	assert.True(t, isOrdered(vs), "slice is unordered: %v", vs)
+}
+
+func assertNotOrdered[T cmp.Ordered](t *testing.T, vs []T) {
+	assert.False(t, isOrdered(vs), "slice is ordered: %v", vs)
+}
+
+func isOrdered[T cmp.Ordered](vs []T) bool {
+	for i := 0; i < len(vs)-1; i++ {
+		if vs[i] > vs[i+1] {
+			return false
+		}
+	}
+	return true
+}
+
+func countOccurrences(s []string, v string) int {
+	var c int
+	for _, i := range s {
+		if i == v {
+			c++
+		}
+	}
+	return c
 }

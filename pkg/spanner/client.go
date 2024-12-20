@@ -667,7 +667,8 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			}
 		}
 
-		switch m.Kind {
+		statementKind := cmp.Or(m.Directives.StatementKind, m.Kind)
+		switch statementKind {
 		case StatementKindDDL:
 			if err := c.ApplyDDL(ctx, m.Statements); err != nil {
 				return nil, &Error{
@@ -689,6 +690,18 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			}
 		case StatementKindPartitionedDML:
 			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements, partitionedConcurrency)
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+
+			migrationsOutput[m.FileName] = migrationInfo{
+				RowsAffected: rowsAffected,
+			}
+		case StatementKindConvergentDML:
+			rowsAffected, err := convergentApply(ctx, c.ApplyDML, m.Statements, m.Directives.Concurrency)
 			if err != nil {
 				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
@@ -1107,4 +1120,32 @@ func (c *Client) releaseMigrationLock(ctx context.Context, tableName, lockIdenti
 		return err
 	}
 	return nil
+}
+
+func convergentApply(ctx context.Context, applyDMLFunc func(context.Context, []string) (int64, error), statements []string, concurrency int) (int64, error) {
+	concurrency = max(concurrency, 1)
+	p := pool.New().WithMaxGoroutines(concurrency).WithErrors()
+
+	// Apply each statement in the migration in a separate transaction.
+	var totalRowCount atomic.Int64
+	for _, statement := range statements {
+		p.Go(func() error {
+			for {
+				rowCount, err := applyDMLFunc(ctx, []string{statement})
+				if err != nil {
+					return err
+				}
+
+				if rowCount == 0 {
+					return nil
+				}
+				totalRowCount.Add(rowCount)
+			}
+		})
+	}
+
+	if err := p.Wait(); err != nil {
+		return 0, err
+	}
+	return totalRowCount.Load(), nil
 }

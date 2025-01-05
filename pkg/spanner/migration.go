@@ -94,7 +94,7 @@ type (
 	// MigrationDirectives configures how the migration should be executed.
 	MigrationDirectives struct {
 		// StatementKind overrides the auto-detected statement kind.
-		// This can be used to customise how
+		// This can be used to customise how migrations are executed.
 		StatementKind StatementKind
 		// Kind defines the execution concurrency. Only applicable when
 		// StatementKind is StatementKindConvergentDML.

@@ -63,6 +63,11 @@ const (
 	StatementKindDDL            StatementKind = "DDL"
 	StatementKindDML            StatementKind = "DML"
 	StatementKindPartitionedDML StatementKind = "PartitionedDML"
+	// StatementKindConvergentDML repeatedly executes all statements in
+	// the migration until no more rows are affected. Each statement is executed
+	// in its own transaction, and the concurrency can be configured via the
+	// @wrench.Concurrency directive.
+	StatementKindConvergentDML StatementKind = "ConvergentDML"
 )
 
 type (
@@ -88,7 +93,12 @@ type (
 
 	// MigrationDirectives configures how the migration should be executed.
 	MigrationDirectives struct {
-		placeholder string
+		// StatementKind overrides the auto-detected statement kind.
+		// This can be used to customise how migrations are executed.
+		StatementKind StatementKind
+		// Kind defines the execution concurrency. Only applicable when
+		// StatementKind is StatementKindConvergentDML.
+		Concurrency int
 	}
 
 	Migrations []*Migration
@@ -369,9 +379,8 @@ func removeCommentsAndTrim(sql string) (string, error) {
 // @wrench.{key}={value} from the migration preamble.
 func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 	const (
-		// placeholderKey is a placeholder to validate parsing until a directive
-		// is implemented.
-		placeholderKey = "TODO"
+		concurrencyKey   = "Concurrency"
+		statementKindKey = "StatementKind"
 	)
 
 	// matches a migration directive in the format @wrench.{key}={value}
@@ -382,8 +391,14 @@ func parseMigrationDirectives(migration string) (MigrationDirectives, error) {
 	for _, match := range directiveMatches {
 		key, val := match["Key"], match["Value"]
 		switch key {
-		case placeholderKey:
-			directives.placeholder = val
+		case statementKindKey:
+			directives.StatementKind = StatementKind(val)
+		case concurrencyKey:
+			concurrency, err := strconv.Atoi(val)
+			if err != nil || concurrency < 1 {
+				return MigrationDirectives{}, fmt.Errorf("invalid concurrency value: %s", val)
+			}
+			directives.Concurrency = concurrency
 		default:
 			return directives, fmt.Errorf("unknown migration directive: %s", key)
 		}

@@ -24,6 +24,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -755,20 +756,25 @@ func Test_parseDDL(t *testing.T) {
 
 func TestClient_RepairMigration(t *testing.T) {
 	ctx := context.Background()
+
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 
-	// add LastName NULLABLE
-	err := migrateUpDir(t, ctx, client, "testdata/migrations", 3, 4, 5)
+	// Create some successful migrations
+	migrationDir := t.TempDir()
+	newFile(t, migrationDir, "000001.sql", []byte(`ALTER TABLE Singers ADD COLUMN LastName STRING(MAX);`))
+	newFile(t, migrationDir, "000002.sql", []byte(`ALTER TABLE Singers ALTER COLUMN LastName STRING(MAX) NOT NULL;`))
+
+	// Run successful migrations
+	err := migrateUpDir(t, ctx, client, migrationDir)
 	require.NoError(t, err, "error running migrations")
 
-	// add row with NULL LastName
-	_, err = client.spannerClient.Apply(ctx, []*spanner.Mutation{spanner.Insert(singerTable, []string{"SingerID", "FirstName"}, []any{"ABC", "Fred"})})
-	require.NoError(t, err, "failed to insert row")
+	// Add a bad migration to the directory
+	newFile(t, migrationDir, "000003.sql", []byte(`ALTER TABLE Singers DROP COLUMN SingerID; -- Attempt to drop PK`))
 
-	// make dirty with bad migration
-	err = migrateUpDir(t, ctx, client, "testdata/migrations", 3, 5)
-	assert.EqualError(t, err, "Cannot specify a null value for column: LastName in table: Singers referenced by key: {String(\"ABC\")}")
+	// Make dirty with bad migration
+	err = migrateUpDir(t, ctx, client, migrationDir)
+	assert.EqualError(t, err, "Cannot drop key column SingerID from table Singers.")
 
 	assertDirtyCount := func(isDirty bool, expected int64) {
 		dirtyCount, err := spannerz.ReadColumnSQL[int64](ctx, client.spannerClient.Single(),
@@ -778,10 +784,10 @@ func TestClient_RepairMigration(t *testing.T) {
 	}
 	const dirty, clean = true, false
 	assertDirtyCount(dirty, 1)
-	assertDirtyCount(clean, 1)
+	assertDirtyCount(clean, 2)
 	version, isDirty, err := client.GetSchemaMigrationVersion(ctx, migrationTable)
 	assert.NoError(t, err)
-	assert.EqualValues(t, 4, version) // failed on 4
+	assert.EqualValues(t, 3, version) // failed on 3
 	assert.True(t, isDirty)
 
 	// is idempotent
@@ -791,10 +797,10 @@ func TestClient_RepairMigration(t *testing.T) {
 		assert.NoError(t, err)
 
 		assertDirtyCount(dirty, 0)
-		assertDirtyCount(clean, 1)
+		assertDirtyCount(clean, 2)
 		version, isDirty, err = client.GetSchemaMigrationVersion(ctx, migrationTable)
 		assert.NoError(t, err)
-		assert.EqualValues(t, 2, version) // back to 2 since 3 was skipped
+		assert.EqualValues(t, 2, version) // back to 2
 		assert.False(t, isDirty)
 	}
 }
@@ -1021,4 +1027,13 @@ func countOccurrences(s []string, v string) int {
 		}
 	}
 	return c
+}
+
+func newFile(t *testing.T, dir, fileName string, content []byte) {
+	file, err := os.Create(filepath.Join(dir, fileName))
+	require.NoError(t, err)
+	defer func(file *os.File) { _ = file.Close() }(file)
+
+	_, err = file.Write(content)
+	require.NoError(t, err)
 }

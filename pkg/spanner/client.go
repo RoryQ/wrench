@@ -841,7 +841,7 @@ func (c *Client) RepairMigration(ctx context.Context, tableName string) error {
 }
 
 func resetSchemaVersion(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string, tableName string) ([]*spanner.Mutation, error) {
-	latestSQL := "select * from " + tableNameHistory + " where dirty = FALSE order by version limit 1"
+	latestSQL := "select * from " + tableNameHistory + " where dirty = FALSE order by version desc limit 1"
 	latest, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, latestSQL)
 	if err != nil {
 		return nil, err

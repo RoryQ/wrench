@@ -756,7 +756,6 @@ func Test_parseDDL(t *testing.T) {
 
 func TestClient_RepairMigration(t *testing.T) {
 	ctx := context.Background()
-
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 

@@ -14,7 +14,7 @@ README.md:
 lint: tooldep.golangci-lint
 	golangci-lint run
 
-GOLANGCI_LINT_VERSION ?= 1.56.2
+GOLANGCI_LINT_VERSION ?= 1.64.8
 .PHONY: tooldep.golangci-lint
 tooldep.golangci-lint:
 	-@[[ "$(shell golangci-lint version)" =~ "$(GOLANGCI_LINT_VERSION)" ]] || \

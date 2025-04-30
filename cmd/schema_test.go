@@ -29,11 +29,25 @@ func Test_schema(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Contains(t, string(contentSchema), string(contentMigration))
+
+	assert.DirExists(t, "testdata/schema_test/model")
+	assert.FileExists(t, "testdata/schema_test/model/custom_ai_model.sql")
+
+	contentAIModelOutput, err := os.ReadFile("testdata/schema_test/model/custom_ai_model.sql")
+	assert.NoError(t, err)
+
+	contentAIModel, err := os.ReadFile("testdata/schema_test/migrations/000002_register_vertex_ai_model.sql")
+	assert.NoError(t, err)
+
+	assert.Contains(t, string(contentAIModelOutput), string(contentAIModel))
 }
 
 func cleanup(t *testing.T) {
 	os.RemoveAll("testdata/schema_test/table")
 	os.RemoveAll("testdata/schema_test/schema.sql")
+	os.RemoveAll("testdata/schema_test/model")
 	require.NoDirExists(t, "testdata/schema_test/table")
 	require.NoFileExists(t, "testdata/schema_test/schema.sql")
+	require.NoDirExists(t, "testdata/schema_test/model")
+	require.NoFileExists(t, "testdata/schema_test/custom_ai_model.sql")
 }

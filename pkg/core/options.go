@@ -19,6 +19,15 @@ type migrateOptions struct {
 	DetectPartitionedDML bool
 	// PrintRowsAffected is whether to print the number of rows affected by each migration.
 	PrintRowsAffected bool
+
+	// Placeholders is map of placeholder variable names to placeholder values.
+	// Currently this only supports replacing the following placeholder keys:
+	// - ${PROJECT_ID}
+	// - ${INSTANCE_ID}
+	// - ${DATABASE_ID}
+	Placeholders map[string]string
+	// PlaceholdersEnabled is used to enable or disable placeholder substitition within migration files.
+	PlaceholdersEnabled bool
 }
 
 func defaultMigrateOptions() *migrateOptions {
@@ -29,6 +38,8 @@ func defaultMigrateOptions() *migrateOptions {
 		VersionTableName:     "SchemaMigrations",
 		Limit:                -1,
 		DetectPartitionedDML: false,
+		Placeholders:         map[string]string{},
+		PlaceholdersEnabled:  false,
 	}
 }
 
@@ -96,6 +107,25 @@ func WithPrintRowsAffected(val bool) MigrateOpt {
 	return func(opt *migrateOptions) error {
 		opt.PrintRowsAffected = val
 		return nil
+	}
+}
+
+// WithPlaceholders sets whether placeholders are enabled and the placeholder key to value mapping.
+func WithDefaultPlaceholders(enabled bool, projectID, instanceID, databaseID string) MigrateOpt {
+	return func(opt *migrateOptions) error {
+		opt.PlaceholdersEnabled = enabled
+		if enabled {
+			opt.Placeholders = DefaultPlaceholders(projectID, instanceID, databaseID)
+		}
+		return nil
+	}
+}
+
+func DefaultPlaceholders(projectID, instanceID, databaseID string) map[string]string {
+	return map[string]string{
+		"PROJECT_ID":  projectID,
+		"INSTANCE_ID": instanceID,
+		"DATABASE_ID": databaseID,
 	}
 }
 

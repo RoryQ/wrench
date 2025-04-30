@@ -28,7 +28,7 @@ func CreateMigrationFile(dir string, name string, opts ...MigrationSequenceOpt) 
 		return "", errors.New("Invalid migration file name.")
 	}
 
-	ms, err := spanner.LoadMigrations(dir, nil, false)
+	ms, err := spanner.LoadMigrations(dir, nil, false, spanner.PlaceholderOptions{ReplacementEnabled: false})
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +78,7 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		return fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry)
 	}
 
-	migrations, err := spanner.LoadMigrations(migrationsDir, options.SkipVersions, options.DetectPartitionedDML)
+	migrations, err := spanner.LoadMigrations(migrationsDir, options.SkipVersions, options.DetectPartitionedDML, spanner.PlaceholderOptions{Placeholders: options.Placeholders, ReplacementEnabled: options.PlaceholdersEnabled})
 	if err != nil {
 		return err
 	}

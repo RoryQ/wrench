@@ -1,7 +1,7 @@
 module github.com/roryq/wrench
 
 require (
-	cloud.google.com/go v0.120.1
+	cloud.google.com/go v0.121.0
 	cloud.google.com/go/spanner v1.80.0
 	github.com/carlmjohnson/versioninfo v0.22.5
 	github.com/google/go-cmp v0.7.0
@@ -89,7 +89,7 @@ require (
 	golang.org/x/time v0.11.0 // indirect
 	google.golang.org/genproto v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250414145226-207652e42e2e // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250414145226-207652e42e2e // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250425173222-7b384671a197 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

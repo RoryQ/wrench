@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/spf13/pflag"
 	"net/http"
 	"os"
 	"strings"
@@ -42,16 +43,15 @@ func findCommand(name string) *cobra.Command {
 func schema(c *cobra.Command, args []string) error {
 	defer gracefulSchemaTasks.Exit()
 
+	projectId := setIfUnset(c.Flag(flagNameProject), "project")
+	instanceId := setIfUnset(c.Flag(flagNameInstance), "instance")
+	databaseId := setIfUnset(c.Flag(flagNameDatabase), "database")
+
 	f := c.Flag(flagSpannerEmulatorImage)
-	_, err := runSpannerEmulator(f.Value.String())
+	_, err := runSpannerEmulator(f.Value.String(), projectId, instanceId, databaseId)
 	if err != nil {
 		return err
 	}
-
-	_ = c.Flag(flagNameProject).Value.Set("schema")
-	_ = c.Flag(flagNameInstance).Value.Set("schema")
-	_ = c.Flag(flagNameDatabase).Value.Set("schema")
-	_ = c.Flag(flagPlaceholderReplacement).Value.Set("false")
 
 	// run migrations
 	if err := migrateUp(c, args); err != nil {
@@ -71,6 +71,13 @@ func schema(c *cobra.Command, args []string) error {
 	return err
 }
 
+func setIfUnset(f *pflag.Flag, val string) string {
+	if f.Value.String() == "" {
+		_ = f.Value.Set(val)
+	}
+	return f.Value.String()
+}
+
 func connectDockerPool() (*dockertest.Pool, error) {
 	pool, err := dockertest.NewPool("")
 	if err != nil {
@@ -80,7 +87,7 @@ func connectDockerPool() (*dockertest.Pool, error) {
 	return pool, pool.Client.Ping()
 }
 
-func runSpannerEmulator(image string) (*spannerEmulator, error) {
+func runSpannerEmulator(image string, projectId, instanceId, databaseId string) (*spannerEmulator, error) {
 	pool, err := connectDockerPool()
 	if err != nil {
 		return nil, err
@@ -91,9 +98,9 @@ func runSpannerEmulator(image string) (*spannerEmulator, error) {
 		Repository: repo,
 		Tag:        tag,
 		Env: []string{
-			"SPANNER_PROJECT_ID=schema",
-			"SPANNER_INSTANCE_ID=schema",
-			"SPANNER_DATABASE_ID=schema",
+			"SPANNER_PROJECT_ID=" + projectId,
+			"SPANNER_INSTANCE_ID=" + instanceId,
+			"SPANNER_DATABASE_ID=" + databaseId,
 		},
 	},
 		func(config *docker.HostConfig) {

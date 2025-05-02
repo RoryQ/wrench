@@ -17,6 +17,8 @@ func Test_schema(t *testing.T) {
 	// execute schema command
 	cmd := schemaCmd
 	_ = cmd.Flag(flagNameDirectory).Value.Set("testdata/schema_test")
+	_ = cmd.Flag(flagNameProject).Value.Set("test-project")
+	_ = cmd.Flag(flagNameInstance).Value.Set("my-instance")
 	err := schema(cmd, []string{})
 	assert.NoError(t, err)
 
@@ -35,11 +37,8 @@ func Test_schema(t *testing.T) {
 
 	contentAIModelOutput, err := os.ReadFile("testdata/schema_test/model/custom_ai_model.sql")
 	assert.NoError(t, err)
-
-	contentAIModel, err := os.ReadFile("testdata/schema_test/migrations/000002_register_vertex_ai_model.sql")
-	assert.NoError(t, err)
-
-	assert.Contains(t, string(contentAIModelOutput), string(contentAIModel))
+	// replacements have been applied
+	assert.Contains(t, string(contentAIModelOutput), `endpoint = '//aiplatform.googleapis.com/projects/test-project/locations/us-central1/publishers/google/models/my-instance-database-model'`)
 }
 
 func cleanup(t *testing.T) {

@@ -60,6 +60,10 @@ type (
 		Version int64
 		Dirty   bool
 	}
+
+	model struct {
+		ModelName string `spanner:"model_name"`
+	}
 )
 
 const (
@@ -100,7 +104,7 @@ func TestApplyDDLFile(t *testing.T) {
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 
-	if err := client.ApplyDDLFile(ctx, ddl); err != nil {
+	if err := client.ApplyDDLFile(ctx, ddl, PlaceholderOptions{}); err != nil {
 		t.Fatalf("failed to apply ddl file: %v", err)
 	}
 
@@ -132,6 +136,48 @@ func TestApplyDDLFile(t *testing.T) {
 	}
 }
 
+func TestApplyDDLFileWithPlaceholders(t *testing.T) {
+	ctx := context.Background()
+
+	ddl, err := os.ReadFile("testdata/placeholders/0001.sql")
+	if err != nil {
+		t.Fatalf("failed to read ddl file: %v", err)
+	}
+
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	placeholderOptions := PlaceholderOptions{
+		Placeholders:       TestPlaceholders,
+		ReplacementEnabled: true,
+	}
+	if err := client.ApplyDDLFile(ctx, ddl, placeholderOptions); err != nil {
+		t.Fatalf("failed to apply ddl file: %v", err)
+	}
+
+	ri := client.spannerClient.Single().Query(ctx, spanner.Statement{
+		SQL: "SELECT model_name FROM information_schema.models WHERE model_catalog='' AND model_name= @model",
+		Params: map[string]interface{}{
+			"model": "custom_ai_model2",
+		},
+	})
+	defer ri.Stop()
+
+	row, err := ri.Next()
+	if err == iterator.Done {
+		t.Fatalf("failed to get table information: %v", err)
+	}
+
+	c := &model{}
+	if err := row.ToStruct(c); err != nil {
+		t.Fatalf("failed to convert row to struct: %v", err)
+	}
+
+	if want, got := "custom_ai_model2", c.ModelName; want != got {
+		t.Errorf("want %s, but got %s", want, got)
+	}
+}
+
 func TestApplyDMLFile(t *testing.T) {
 	ctx := context.Background()
 
@@ -140,22 +186,41 @@ func TestApplyDMLFile(t *testing.T) {
 
 	tests := []struct {
 		name                   string
+		dmlFile                string
 		partitioned            bool
+		placeholderOptions     PlaceholderOptions
 		partitionedConcurrency int
+		wantRowValue           singer
 	}{
 		{
-			name:        "normal DML",
+			name:         "normal DML",
+			dmlFile:      "testdata/dml.sql",
+			partitioned:  false,
+			wantRowValue: singer{SingerID: "1", FirstName: "Bar"},
+		},
+		{
+			name:        "normal DML with placeholders",
+			dmlFile:     "testdata/dml_with_placeholders.sql",
 			partitioned: false,
+			placeholderOptions: PlaceholderOptions{
+				Placeholders:       TestPlaceholders,
+				ReplacementEnabled: true,
+			},
+			wantRowValue: singer{SingerID: "1", FirstName: "projectID134-instanceID456-databaseID789"},
 		},
 		{
 			name:                   "partitioned DML",
+			dmlFile:                "testdata/dml.sql",
 			partitioned:            true,
 			partitionedConcurrency: 1,
+			wantRowValue:           singer{SingerID: "1", FirstName: "Bar"},
 		},
 		{
 			name:                   "partitioned DML concurrently",
+			dmlFile:                "testdata/dml.sql",
 			partitioned:            true,
 			partitionedConcurrency: 10,
+			wantRowValue:           singer{SingerID: "1", FirstName: "Bar"},
 		},
 	}
 
@@ -173,12 +238,12 @@ func TestApplyDMLFile(t *testing.T) {
 				t.Fatalf("failed to apply mutation: %v", err)
 			}
 
-			dml, err := os.ReadFile("testdata/dml.sql")
+			dml, err := os.ReadFile(tc.dmlFile)
 			if err != nil {
 				t.Fatalf("failed to read dml file: %v", err)
 			}
 
-			n, err := client.ApplyDMLFile(ctx, dml, tc.partitioned, tc.partitionedConcurrency)
+			n, err := client.ApplyDMLFile(ctx, dml, tc.partitioned, tc.partitionedConcurrency, tc.placeholderOptions)
 			if err != nil {
 				t.Fatalf("failed to apply dml file: %v", err)
 			}
@@ -187,19 +252,17 @@ func TestApplyDMLFile(t *testing.T) {
 				t.Fatalf("want %d, but got %d", want, got)
 			}
 
-			row, err := client.spannerClient.Single().ReadRow(ctx, singerTable, spanner.Key{key}, []string{"FirstName"})
+			row, err := client.spannerClient.Single().ReadRow(ctx, singerTable, spanner.Key{key}, []string{"SingerID", "FirstName"})
 			if err != nil {
 				t.Fatalf("failed to read row: %v", err)
 			}
 
-			s := &singer{}
-			if err := row.ToStruct(s); err != nil {
+			gotRowValue := &singer{}
+			if err := row.ToStruct(gotRowValue); err != nil {
 				t.Fatalf("failed to convert row to struct: %v", err)
 			}
 
-			if want, got := "Bar", s.FirstName; want != got {
-				t.Errorf("want %s, but got %s", want, got)
-			}
+			assert.Equal(t, &tc.wantRowValue, gotRowValue, "want %v, but got %v", tc.wantRowValue, gotRowValue)
 		})
 	}
 }
@@ -221,7 +284,7 @@ func TestExecuteMigrations(t *testing.T) {
 		t.Fatalf("failed to apply mutation: %v", err)
 	}
 
-	migrations, err := LoadMigrations("testdata/migrations", nil, false)
+	migrations, err := LoadMigrations("testdata/migrations", nil, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -263,6 +326,34 @@ func TestExecuteMigrations(t *testing.T) {
 	if want, got := int64(4), migrationsOutput["000005.sql"].RowsAffected; want != got {
 		t.Errorf("migration %q: want %d rows affected, but got %d", "000005.sql", want, got)
 	}
+}
+
+func TestExecuteMigrationsWithPlaceholders(t *testing.T) {
+	ctx := context.Background()
+
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	// Skip the first migration as it involves an LLM model registration statement that is not supported by the emulator.
+	migrations, err := LoadMigrations("testdata/placeholders", nil, false, PlaceholderOptions{
+		Placeholders:       TestPlaceholders,
+		ReplacementEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to load migrations: %v", err)
+	}
+
+	var migrationsOutput MigrationsOutput
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1); err != nil {
+		t.Fatalf("failed to execute migration: %v", err)
+	}
+
+	if len(migrationsOutput) != 0 {
+		t.Errorf("want zero length migrationInfo, but got %v", len(migrationsOutput))
+	}
+
+	// ensure that only 0002.sql has been applied.
+	ensureMigrationVersionRecord(t, ctx, client, 1, false)
 }
 
 func ensureMigrationColumn(t *testing.T, ctx context.Context, client *Client, columnName, spannerType, isNullable string) {
@@ -526,7 +617,7 @@ func TestHotfixMigration(t *testing.T) {
 	defer done()
 
 	// apply changes from "trunk": [100, 200]
-	migrations, err := LoadMigrations("testdata/hotfix/a", nil, false)
+	migrations, err := LoadMigrations("testdata/hotfix/a", nil, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -544,7 +635,7 @@ func TestHotfixMigration(t *testing.T) {
 	ensureMigrationHistoryRecord(t, ctx, client, 200, false)
 
 	// apply changes from "hotfix" branch: [101]
-	migrations, err = LoadMigrations("testdata/hotfix/b", nil, false)
+	migrations, err = LoadMigrations("testdata/hotfix/b", nil, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -568,7 +659,7 @@ func TestUpgrade(t *testing.T) {
 		defer done()
 
 		// run migrations
-		migrations, err := LoadMigrations("testdata/migrations", nil, false)
+		migrations, err := LoadMigrations("testdata/migrations", nil, false, PlaceholderOptions{})
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}
@@ -853,7 +944,7 @@ func Test_MigrationInfoString(t *testing.T) {
 
 func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string, toSkip ...uint) error {
 	t.Helper()
-	migrations, err := LoadMigrations(dir, toSkip, false)
+	migrations, err := LoadMigrations(dir, toSkip, false, PlaceholderOptions{})
 	if err != nil {
 		return err
 	}

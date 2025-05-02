@@ -53,6 +53,8 @@ var (
 
 	dmlAnyRegex = regexp.MustCompile("^(UPDATE|DELETE|INSERT)[\t\n\f\r ].*")
 
+	placeholderRegex = regexp.MustCompile(`\$\{(?P<PlaceholderName>[A-Za-z_]+)\}`)
+
 	// 1. INSERT statements are not supported for partitioned DML. Although not every DML can be partitioned
 	// as it must be idempotent. This probably isn't solvable with more regexes.
 	// 2. UPDATE or DELETE statements with a SELECT statement in the WHERE clause is not fully partitionable.
@@ -104,6 +106,14 @@ type (
 	Migrations []*Migration
 
 	StatementKind string
+
+	PlaceholderOptions struct {
+		// Placeholders is map of placeholder variable names to placeholder values.
+		// These will be used for placeholder replacement if ReplacementEnabled is true.
+		Placeholders map[string]string
+		// ReplacementEnabled is used to enable or disable placeholder substitition within migration files.
+		ReplacementEnabled bool
+	}
 )
 
 func (ms Migrations) Len() int {
@@ -118,7 +128,7 @@ func (ms Migrations) Less(i, j int) bool {
 	return ms[i].Version < ms[j].Version
 }
 
-func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (Migrations, error) {
+func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool, placeholderOptions PlaceholderOptions) (Migrations, error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -157,6 +167,13 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool) (
 		statements, err := toStatements(file)
 		if err != nil {
 			return nil, err
+		}
+
+		if placeholderOptions.ReplacementEnabled {
+			statements, err = replacePlaceholders(statements, placeholderOptions.Placeholders)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		kind, err := inspectStatementsKind(statements, detectPartitionedDML)
@@ -206,6 +223,30 @@ func toStatements(file []byte) ([]string, error) {
 		}
 	}
 	return statements, nil
+}
+
+func replacePlaceholders(statements []string, placeholders map[string]string) ([]string, error) {
+	replacedStatements := []string{}
+	for _, statement := range statements {
+		// Check for any placeholder references that are not configured in the placeholders key value map.
+		placeholdersInStatement, found := xregexp.FindAllMatchGroups(placeholderRegex, statement)
+		if found {
+			for _, match := range placeholdersInStatement {
+				_, ok := placeholders[match["PlaceholderName"]]
+				if !ok {
+					return nil, fmt.Errorf("migration statement refers to placeholder variable that is not defined")
+				}
+			}
+		}
+
+		// Perform placeholder replacement.
+		for placeholderName, placeholderValue := range placeholders {
+			statement = strings.ReplaceAll(statement, fmt.Sprintf("${%s}", placeholderName), placeholderValue)
+		}
+		replacedStatements = append(replacedStatements, statement)
+	}
+
+	return replacedStatements, nil
 }
 
 func inspectStatementsKind(statements []string, detectPartitionedDML bool) (StatementKind, error) {

@@ -1,0 +1,1 @@
+UPDATE Singers SET FirstName = "${PROJECT_ID}-${INSTANCE_ID}-${DATABASE_ID}" WHERE SingerID = "1";

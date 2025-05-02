@@ -34,8 +34,16 @@ const (
 	TestStmtNonPartitionedDML = "DELETE FROM Singers WHERE SingerId NOT IN (SELECT SingerId FROM Concerts)"
 )
 
+var (
+	TestPlaceholders = map[string]string{
+		"PROJECT_ID":  "projectID134",
+		"INSTANCE_ID": "instanceID456",
+		"DATABASE_ID": "databaseID789",
+	}
+)
+
 func TestLoadMigrations(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), nil, false)
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), nil, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +81,7 @@ func TestLoadMigrations(t *testing.T) {
 }
 
 func TestLoadMigrationsSkipVersion(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3, 4}, false)
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3, 4}, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,12 +96,98 @@ func TestLoadMigrationsSkipVersion(t *testing.T) {
 }
 
 func TestLoadMigrationsDuplicates(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "duplicate"), nil, false)
+	ms, err := LoadMigrations(filepath.Join("testdata", "duplicate"), nil, false, PlaceholderOptions{})
 	if err == nil {
 		t.Errorf("error should not be nil")
 	}
 	if len(ms) > 0 {
 		t.Errorf("migrations should be empty")
+	}
+}
+
+func TestLoadMigrationsSubstitutePlaceHolders(t *testing.T) {
+	placeholderOptions := PlaceholderOptions{
+		Placeholders:       TestPlaceholders,
+		ReplacementEnabled: true,
+	}
+	ms, err := LoadMigrations(filepath.Join("testdata", "placeholders"), nil, false, placeholderOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(ms) != 1 {
+		t.Fatalf("migrations length want 1, but got %v", len(ms))
+	}
+}
+
+func TestReplacePlaceholders(t *testing.T) {
+	tests := []struct {
+		name         string
+		statements   []string
+		placeholders map[string]string
+		want         []string
+		wantErr      bool
+	}{
+		{
+			name: "successfully replaces all placeholders with values",
+
+			statements: []string{
+				`UPDATE Singers SET FirstName = "${PROJECT_ID}" WHERE SingerID = "${DATABASE_ID}";`,
+				`UPDATE Singers SET FirstName = "${INSTANCE_ID}" WHERE SingerID = "${DATABASE_ID}";`,
+			},
+			placeholders: TestPlaceholders,
+			want: []string{
+				`UPDATE Singers SET FirstName = "projectID134" WHERE SingerID = "databaseID789";`,
+				`UPDATE Singers SET FirstName = "instanceID456" WHERE SingerID = "databaseID789";`,
+			},
+			wantErr: false,
+		},
+		{
+			name: "does not replace placeholders with spaces",
+			statements: []string{
+				`UPDATE Singers SET FirstName = "${ PROJECT_ID }" WHERE SingerID = "${ DATABASE_ID }";`,
+				`UPDATE Singers SET FirstName = "${ INSTANCE_ID }" WHERE SingerID = "${ DATABASE_ID }";`,
+			},
+			placeholders: TestPlaceholders,
+			want: []string{
+				`UPDATE Singers SET FirstName = "${ PROJECT_ID }" WHERE SingerID = "${ DATABASE_ID }";`,
+				`UPDATE Singers SET FirstName = "${ INSTANCE_ID }" WHERE SingerID = "${ DATABASE_ID }";`,
+			},
+			wantErr: false,
+		},
+		{
+			name: "errors when placeholders do not match case",
+			statements: []string{
+				`UPDATE Singers SET FirstName = "${PrOjECT_iD}" WHERE SingerID = "${dataBase_iD}";`,
+				`UPDATE Singers SET FirstName = "${InsTanCe_iD}" WHERE SingerID = "${dataBase_iD}";`,
+			},
+			placeholders: TestPlaceholders,
+			wantErr:      true,
+		},
+		{
+			name: "errors when one statement refers to a placeholder that is not configured",
+			statements: []string{
+				`UPDATE Singers SET FirstName = "${PROJECT_ID}" WHERE SingerID = "${DATABASE_ID}";`,
+				`UPDATE Singers SET FirstName = "${VERSION}" WHERE SingerID = "${DATABASE_ID}";`,
+			},
+			placeholders: TestPlaceholders,
+
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := replacePlaceholders(tt.statements, tt.placeholders)
+			if tt.want == nil {
+				assert.Nil(t, got)
+			} else {
+				assert.ElementsMatch(t, tt.want, got)
+			}
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("replacePlaceholders() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 

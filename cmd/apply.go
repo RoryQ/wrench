@@ -25,6 +25,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/roryq/wrench/pkg/core"
+	"github.com/roryq/wrench/pkg/spanner"
 	"github.com/spf13/cobra"
 )
 
@@ -49,6 +51,23 @@ func apply(c *cobra.Command, _ []string) error {
 	}
 	defer client.Close()
 
+	placeholderReplacement, err := c.Flags().GetBool(flagPlaceholderReplacement)
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
+
+	placeholderOptions := spanner.PlaceholderOptions{
+		Placeholders: core.DefaultPlaceholders(
+			c.Flag(flagNameProject).Value.String(),
+			c.Flag(flagNameInstance).Value.String(),
+			c.Flag(flagNameDatabase).Value.String(),
+		),
+		ReplacementEnabled: placeholderReplacement,
+	}
+
 	if ddlFile != "" {
 		if dmlFile != "" {
 			return errors.New("Cannot specify DDL and DML at same time.")
@@ -62,7 +81,7 @@ func apply(c *cobra.Command, _ []string) error {
 			}
 		}
 
-		err = client.ApplyDDLFile(ctx, ddl)
+		err = client.ApplyDDLFile(ctx, ddl, placeholderOptions)
 		if err != nil {
 			return &Error{
 				err: err,
@@ -87,7 +106,7 @@ func apply(c *cobra.Command, _ []string) error {
 	}
 
 	concurrency := int(partitionedDMLConcurrency)
-	numAffectedRows, err := client.ApplyDMLFile(ctx, dml, partitioned, concurrency)
+	numAffectedRows, err := client.ApplyDMLFile(ctx, dml, partitioned, concurrency, placeholderOptions)
 	if err != nil {
 		return &Error{
 			err: err,
@@ -103,4 +122,5 @@ func init() {
 	applyCmd.PersistentFlags().StringVar(&ddlFile, flagDDLFile, "", "DDL file to be applied")
 	applyCmd.PersistentFlags().StringVar(&dmlFile, flagDMLFile, "", "DML file to be applied")
 	applyCmd.PersistentFlags().BoolVar(&partitioned, flagPartitioned, false, "Whether given DML should be executed as a Partitioned-DML or not")
+	applyCmd.Flags().Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement for ${PROJECT_ID}, ${INSTANCE_ID} and ${DATABASE_ID}")
 }

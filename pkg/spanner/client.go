@@ -63,7 +63,7 @@ const (
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
 	indexOptions              = `unique\s+|null_filtered\s+|unique\s+null_filtered\s+`
-	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index|view))\s+(?P<ObjectName>\w+).*`)
+	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index|view|model))\s+(?P<ObjectName>\w+).*`)
 )
 
 type UpgradeStatus string
@@ -382,10 +382,17 @@ func (c *Client) staticDataQuery(ctx context.Context, table, customOrderBy strin
 	return spanner.NewStatement("SELECT * FROM " + table + orderByClause), nil
 }
 
-func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte) error {
+func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte, placeholderOptions PlaceholderOptions) error {
 	statements, err := toStatements(ddl)
 	if err != nil {
 		return err
+	}
+
+	if placeholderOptions.ReplacementEnabled {
+		statements, err = replacePlaceholders(statements, placeholderOptions.Placeholders)
+		if err != nil {
+			return err
+		}
 	}
 	return c.ApplyDDL(ctx, statements)
 }
@@ -415,10 +422,17 @@ func (c *Client) ApplyDDL(ctx context.Context, statements []string) error {
 	return nil
 }
 
-func (c *Client) ApplyDMLFile(ctx context.Context, dml []byte, partitioned bool, concurrency int) (int64, error) {
+func (c *Client) ApplyDMLFile(ctx context.Context, dml []byte, partitioned bool, concurrency int, placeholderOptions PlaceholderOptions) (int64, error) {
 	statements, err := toStatements(dml)
 	if err != nil {
 		return 0, err
+	}
+
+	if placeholderOptions.ReplacementEnabled {
+		statements, err = replacePlaceholders(statements, placeholderOptions.Placeholders)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	if partitioned {

@@ -100,6 +100,7 @@ func init() {
 
 	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
 	migrateUpCmd.Flags().UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")
+	migrateUpCmd.Flags().Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement for ${PROJECT_ID}, ${INSTANCE_ID} and ${DATABASE_ID}")
 }
 
 func migrateCreate(c *cobra.Command, args []string) error {
@@ -171,6 +172,14 @@ func migrateUp(c *cobra.Command, args []string) error {
 	}
 	defer client.Close()
 
+	placeholdersEnabled, err := c.Flags().GetBool(flagPlaceholderReplacement)
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
+
 	migrationsDir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
 	err = core.MigrateUp(ctx, client, migrationsDir,
 		core.WithLimit(limit),
@@ -181,7 +190,14 @@ func migrateUp(c *cobra.Command, args []string) error {
 		core.WithPartitionedDMLConcurrency(partitionedDMLConcurrency),
 		core.WithDetectPartitionedDML(detectPartitionedDML),
 		core.WithPrintRowsAffected(verbose),
+		core.WithDefaultPlaceholders(
+			placeholdersEnabled,
+			c.Flag(flagNameProject).Value.String(),
+			c.Flag(flagNameInstance).Value.String(),
+			c.Flag(flagNameDatabase).Value.String(),
+		),
 	)
+
 	if err != nil {
 		return &Error{
 			cmd: c,

@@ -2,7 +2,7 @@ module github.com/roryq/wrench
 
 require (
 	cloud.google.com/go v0.121.0
-	cloud.google.com/go/spanner v1.80.0
+	cloud.google.com/go/spanner v1.82.0
 	github.com/carlmjohnson/versioninfo v0.22.5
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0

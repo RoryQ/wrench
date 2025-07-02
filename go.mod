@@ -13,7 +13,7 @@ require (
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/pflag v1.0.6
 	github.com/stretchr/testify v1.10.0
-	google.golang.org/api v0.237.0
+	google.golang.org/api v0.240.0
 	google.golang.org/grpc v1.73.0
 )
 

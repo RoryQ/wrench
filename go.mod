@@ -1,7 +1,7 @@
 module github.com/roryq/wrench
 
 require (
-	cloud.google.com/go v0.121.6
+	cloud.google.com/go v0.122.0
 	cloud.google.com/go/spanner v1.84.1
 	github.com/carlmjohnson/versioninfo v0.22.5
 	github.com/google/go-cmp v0.7.0
@@ -95,6 +95,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-go 1.23.0
-
-toolchain go1.24.0
+go 1.24.0

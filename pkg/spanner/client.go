@@ -123,7 +123,7 @@ func NewClient(ctx context.Context, config *Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) CreateDatabase(ctx context.Context, ddl []byte) error {
+func (c *Client) CreateDatabase(ctx context.Context, ddl []byte, protoDescriptors []byte) error {
 	statements, err := toStatements(ddl)
 	if err != nil {
 		return &Error{
@@ -133,9 +133,10 @@ func (c *Client) CreateDatabase(ctx context.Context, ddl []byte) error {
 	}
 
 	createReq := &databasepb.CreateDatabaseRequest{
-		Parent:          fmt.Sprintf("projects/%s/instances/%s", c.config.Project, c.config.Instance),
-		CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", c.config.Database),
-		ExtraStatements: statements,
+		Parent:           fmt.Sprintf("projects/%s/instances/%s", c.config.Project, c.config.Instance),
+		CreateStatement:  fmt.Sprintf("CREATE DATABASE `%s`", c.config.Database),
+		ExtraStatements:  statements,
+		ProtoDescriptors: protoDescriptors,
 	}
 
 	op, err := c.spannerAdminClient.CreateDatabase(ctx, createReq)
@@ -382,7 +383,7 @@ func (c *Client) staticDataQuery(ctx context.Context, table, customOrderBy strin
 	return spanner.NewStatement("SELECT * FROM " + table + orderByClause), nil
 }
 
-func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte, placeholderOptions PlaceholderOptions) error {
+func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte, placeholderOptions PlaceholderOptions, protoDescriptors []byte) error {
 	statements, err := toStatements(ddl)
 	if err != nil {
 		return err
@@ -394,13 +395,14 @@ func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte, placeholderOption
 			return err
 		}
 	}
-	return c.ApplyDDL(ctx, statements)
+	return c.ApplyDDL(ctx, statements, protoDescriptors)
 }
 
-func (c *Client) ApplyDDL(ctx context.Context, statements []string) error {
+func (c *Client) ApplyDDL(ctx context.Context, statements []string, protoDescriptors []byte) error {
 	req := &databasepb.UpdateDatabaseDdlRequest{
-		Database:   c.config.URL(),
-		Statements: statements,
+		Database:         c.config.URL(),
+		Statements:       statements,
+		ProtoDescriptors: protoDescriptors,
 	}
 
 	op, err := c.spannerAdminClient.UpdateDatabaseDdl(ctx, req)
@@ -495,13 +497,13 @@ func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string, c
 	return numAffectedRows.Load(), nil
 }
 
-func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) (MigrationsOutput, error) {
+func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, protoDescriptors []byte) (MigrationsOutput, error) {
 	err := c.backfillMigrations(ctx, migrations, tableName)
 	if err != nil {
 		return nil, err
 	}
 
-	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName, 1)
+	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName, 1, protoDescriptors)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +568,7 @@ func (c *Client) upsertVersionHistory(ctx context.Context, rw *spanner.ReadWrite
 }
 
 func (c *Client) markUpgradeComplete(ctx context.Context) error {
-	err := c.ApplyDDL(ctx, []string{"DROP TABLE " + upgradeIndicator})
+	err := c.ApplyDDL(ctx, []string{"DROP TABLE " + upgradeIndicator}, nil)
 	if err != nil {
 		return &Error{
 			Code: ErrorCodeCompleteUpgrade,
@@ -630,7 +632,7 @@ func (i MigrationsOutput) String() string {
 	return fmt.Sprintf("%s\n", output)
 }
 
-func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int) (MigrationsOutput, error) {
+func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int, protoDescriptors []byte) (MigrationsOutput, error) {
 	sort.Sort(migrations)
 
 	version, dirty, err := c.GetSchemaMigrationVersion(ctx, tableName)
@@ -658,6 +660,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			err:  err,
 		}
 	}
+
 	applied := make(map[int64]bool)
 	for i := range history {
 		applied[history[i].Version] = true
@@ -684,7 +687,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		statementKind := cmp.Or(m.Directives.StatementKind, m.Kind)
 		switch statementKind {
 		case StatementKindDDL:
-			if err := c.ApplyDDL(ctx, m.Statements); err != nil {
+			if err := c.ApplyDDL(ctx, m.Statements, protoDescriptors); err != nil {
 				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
@@ -991,7 +994,7 @@ func (c *Client) createHistoryTable(ctx context.Context, historyTableName string
 	Modified TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true)
 	) PRIMARY KEY(Version)`, historyTableName)
 
-	return c.ApplyDDL(ctx, []string{stmt})
+	return c.ApplyDDL(ctx, []string{stmt}, nil)
 }
 
 func (c *Client) createUpgradeIndicatorTable(ctx context.Context) error {
@@ -1001,7 +1004,7 @@ func (c *Client) createUpgradeIndicatorTable(ctx context.Context) error {
 
 	stmt := fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
 
-	return c.ApplyDDL(ctx, []string{stmt})
+	return c.ApplyDDL(ctx, []string{stmt}, nil)
 }
 
 func (c *Client) createVersionTable(ctx context.Context, tableName string) error {
@@ -1014,7 +1017,7 @@ func (c *Client) createVersionTable(ctx context.Context, tableName string) error
     Dirty    BOOL NOT NULL
 	) PRIMARY KEY(Version)`, tableName)
 
-	return c.ApplyDDL(ctx, []string{stmt})
+	return c.ApplyDDL(ctx, []string{stmt}, nil)
 }
 
 type MigrationLock struct {
@@ -1027,7 +1030,7 @@ type MigrationLock struct {
 func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error {
 	if !c.tableExists(ctx, tableName) {
 		sql := fmt.Sprintf("CREATE TABLE %s(ID INT64, LockIdentifier STRING(200), Expiry TIMESTAMP) PRIMARY KEY(ID)", tableName)
-		err := c.ApplyDDL(ctx, []string{sql})
+		err := c.ApplyDDL(ctx, []string{sql}, nil)
 		if err != nil {
 			return err
 		}

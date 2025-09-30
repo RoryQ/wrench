@@ -36,6 +36,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 
+	"github.com/roryq/wrench/pkg/spanner/testdata/with_proto/proto/status"
 	"github.com/roryq/wrench/pkg/spannerz"
 )
 
@@ -63,6 +64,11 @@ type (
 
 	model struct {
 		ModelName string `spanner:"model_name"`
+	}
+
+	tableWithStatus struct {
+		ID     string        `spanner:"ID"`
+		Status status.Status `spanner:"Status"`
 	}
 )
 
@@ -104,7 +110,7 @@ func TestApplyDDLFile(t *testing.T) {
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 
-	if err := client.ApplyDDLFile(ctx, ddl, PlaceholderOptions{}); err != nil {
+	if err := client.ApplyDDLFile(ctx, ddl, PlaceholderOptions{}, nil); err != nil {
 		t.Fatalf("failed to apply ddl file: %v", err)
 	}
 
@@ -151,7 +157,7 @@ func TestApplyDDLFileWithPlaceholders(t *testing.T) {
 		Placeholders:       TestPlaceholders,
 		ReplacementEnabled: true,
 	}
-	if err := client.ApplyDDLFile(ctx, ddl, placeholderOptions); err != nil {
+	if err := client.ApplyDDLFile(ctx, ddl, placeholderOptions, nil); err != nil {
 		t.Fatalf("failed to apply ddl file: %v", err)
 	}
 
@@ -291,7 +297,7 @@ func TestExecuteMigrations(t *testing.T) {
 
 	var migrationsOutput MigrationsOutput
 	// only apply 000002.sql by specifying limit 1.
-	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
@@ -305,7 +311,7 @@ func TestExecuteMigrations(t *testing.T) {
 	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
 
 	// execute remaining migrations
-	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
@@ -344,7 +350,7 @@ func TestExecuteMigrationsWithPlaceholders(t *testing.T) {
 	}
 
 	var migrationsOutput MigrationsOutput
-	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
@@ -592,7 +598,7 @@ func TestClient_DetermineUpgradeStatus(t *testing.T) {
 			defer done()
 
 			if tt.args.ddlStatement != "" {
-				err := client.ApplyDDL(ctx, []string{tt.args.ddlStatement})
+				err := client.ApplyDDL(ctx, []string{tt.args.ddlStatement}, nil)
 				if err != nil {
 					t.Error(err)
 				}
@@ -611,6 +617,64 @@ func TestClient_DetermineUpgradeStatus(t *testing.T) {
 	}
 }
 
+func TestMigrationWithProto(t *testing.T) {
+	ctx := context.Background()
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	migrations, err := LoadMigrations("testdata/with_proto/migrations", nil, false, PlaceholderOptions{})
+	if err != nil {
+		t.Fatalf("failed to load migrations: %v", err)
+	}
+	protoDescriptors, err := os.ReadFile("testdata/with_proto/proto/status_descriptor.pb")
+	if err != nil {
+		t.Fatalf("failed to load migrations: %v", err)
+	}
+	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, protoDescriptors); err != nil {
+		t.Fatalf("failed to execute migration: %v", err)
+	}
+	history, err := client.GetMigrationHistory(ctx, migrationTable)
+	if err != nil {
+		t.Fatalf("failed to get migration history: %v", err)
+	}
+	if len(history) != 1 {
+		t.Errorf("incorrect history versions: %+v", history)
+	}
+	ensureMigrationHistoryRecord(t, ctx, client, 1, false)
+
+	// Insert and read back to ensure correct behaviour with proto
+	testData := &tableWithStatus{
+		ID:     uuid.NewString(),
+		Status: status.Status_STATUS_ACTIVE,
+	}
+	mutation, err := spanner.InsertStruct("TableWithStatus", testData)
+	if err != nil {
+		t.Fatalf("failed to create insert mutation: %v", err)
+	}
+	_, err = client.spannerClient.Apply(ctx, []*spanner.Mutation{mutation})
+	if err != nil {
+		t.Fatalf("failed to insert row with proto using struct: %v", err)
+	}
+	row, err := client.spannerClient.Single().ReadRow(ctx, "TableWithStatus", spanner.Key{testData.ID}, []string{"ID", "Status"})
+	if err != nil {
+		t.Fatalf("failed to read row: %v", err)
+	}
+
+	readData := &tableWithStatus{}
+	if err := row.ToStruct(readData); err != nil {
+		t.Fatalf("failed to scan row to struct: %v", err)
+	}
+	if want, got := testData.ID, readData.ID; want != got {
+		t.Errorf("want ID %s, but got %s", want, got)
+	}
+	if want, got := testData.Status, readData.Status; want != got {
+		t.Errorf("want Status %v, but got %v", want, got)
+	}
+	if want, got := "STATUS_ACTIVE", readData.Status.String(); want != got {
+		t.Errorf("want Status string %s, but got %s", want, got)
+	}
+}
+
 func TestHotfixMigration(t *testing.T) {
 	ctx := context.Background()
 	client, done := testClientWithDatabase(t, ctx)
@@ -621,7 +685,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -639,7 +703,7 @@ func TestHotfixMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+	if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err = client.GetMigrationHistory(ctx, migrationTable)
@@ -663,7 +727,7 @@ func TestUpgrade(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}
-		if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1); err != nil {
+		if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 		expected, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -672,7 +736,7 @@ func TestUpgrade(t *testing.T) {
 		}
 
 		// clear history table
-		if err := client.ApplyDDL(ctx, []string{"DROP TABLE " + migrationTable + historyStr}); err != nil {
+		if err := client.ApplyDDL(ctx, []string{"DROP TABLE " + migrationTable + historyStr}, nil); err != nil {
 			t.Fatalf("failed to drop migration history: %v", err)
 		}
 		if err := client.EnsureMigrationTable(ctx, migrationTable); err != nil {
@@ -681,7 +745,7 @@ func TestUpgrade(t *testing.T) {
 		if client.tableExists(ctx, upgradeIndicator) == false {
 			t.Error("upgrade indicator should exist")
 		}
-		if _, err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+		if _, err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable, nil); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 
@@ -749,7 +813,7 @@ func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func())
 		t.Fatalf("failed to read schema file: %v", err)
 	}
 
-	if err := client.CreateDatabase(ctx, ddl); err != nil {
+	if err := client.CreateDatabase(ctx, ddl, nil); err != nil {
 		t.Fatalf("failed to create database: %v", err)
 	}
 
@@ -949,7 +1013,7 @@ func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string,
 		return err
 	}
 
-	_, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1)
+	_, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil)
 	if err != nil {
 		return err
 	}

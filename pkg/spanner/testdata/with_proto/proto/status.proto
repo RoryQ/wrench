@@ -1,0 +1,10 @@
+syntax = "proto3";
+package status;
+option go_package = "/status";
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE = 1;
+  STATUS_CANCELLED = 2;
+  STATUS_SKIPPED = 3;
+}

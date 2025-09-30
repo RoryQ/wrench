@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/kennygrant/sanitize"
+	"github.com/roryq/wrench/internal/fs"
 	"github.com/spf13/cobra"
 
 	"github.com/roryq/wrench/pkg/core"
@@ -84,6 +85,7 @@ func init() {
 		Long:  "Call once to enable the migration lock. Call again to reset the lock if a failure caused it not to release",
 		RunE:  migrateLocker,
 	}
+	migrateUpCmd.Flags().String(flagProtoDescriptorFile, "", "Proto descriptor file to be used with migrations")
 
 	migrateCmd.AddCommand(
 		migrateCreateCmd,
@@ -180,6 +182,18 @@ func migrateUp(c *cobra.Command, args []string) error {
 		}
 	}
 
+	var protoDescriptor []byte
+	protoDescriptorFile := protoDescriptorFilePath(c)
+	if protoDescriptorFile != "" {
+		protoDescriptor, err = fs.ReadFile(ctx, protoDescriptorFile)
+		if err != nil {
+			return &Error{
+				err: err,
+				cmd: c,
+			}
+		}
+	}
+
 	migrationsDir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
 	err = core.MigrateUp(ctx, client, migrationsDir,
 		core.WithLimit(limit),
@@ -196,6 +210,7 @@ func migrateUp(c *cobra.Command, args []string) error {
 			c.Flag(flagNameInstance).Value.String(),
 			c.Flag(flagNameDatabase).Value.String(),
 		),
+		core.WithProtoDescriptors(protoDescriptor),
 	)
 
 	if err != nil {

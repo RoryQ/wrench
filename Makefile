@@ -37,7 +37,7 @@ _spanner-up:
         --env https_proxy="" \
 		--name spanner-tests \
 		roryq/spanner-emulator:latest >/dev/null 2>&1
-	@sleep 5
+	@sleep 2
 
 .PHONY: _spanner-down
 _spanner-down:

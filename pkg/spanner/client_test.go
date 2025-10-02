@@ -36,7 +36,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 
-	"github.com/roryq/wrench/pkg/spanner/testdata/with_proto/proto/status"
+	"github.com/roryq/wrench/pkg/spanner/testdata/with_proto/proto/types"
 	"github.com/roryq/wrench/pkg/spannerz"
 )
 
@@ -67,8 +67,9 @@ type (
 	}
 
 	tableWithStatus struct {
-		ID     string        `spanner:"ID"`
-		Status status.Status `spanner:"Status"`
+		ID          string             `spanner:"ID"`
+		Status      types.Status       `spanner:"Status"`
+		NestedField *types.ComplexType `spanner:"NestedField"`
 	}
 )
 
@@ -626,7 +627,7 @@ func TestMigrationWithProto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	protoDescriptors, err := os.ReadFile("testdata/with_proto/proto/status_descriptor.pb")
+	protoDescriptors, err := os.ReadFile("testdata/with_proto/proto/types_descriptor.pb")
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
@@ -645,7 +646,13 @@ func TestMigrationWithProto(t *testing.T) {
 	// Insert and read back to ensure correct behaviour with proto
 	testData := &tableWithStatus{
 		ID:     uuid.NewString(),
-		Status: status.Status_STATUS_ACTIVE,
+		Status: types.Status_STATUS_ACTIVE,
+		NestedField: &types.ComplexType{
+			Field: &types.NestedComplexType{
+				Value:  "test",
+				Status: types.Status_STATUS_SKIPPED,
+			},
+		},
 	}
 	mutation, err := spanner.InsertStruct("TableWithStatus", testData)
 	if err != nil {
@@ -655,7 +662,7 @@ func TestMigrationWithProto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to insert row with proto using struct: %v", err)
 	}
-	row, err := client.spannerClient.Single().ReadRow(ctx, "TableWithStatus", spanner.Key{testData.ID}, []string{"ID", "Status"})
+	row, err := client.spannerClient.Single().ReadRow(ctx, "TableWithStatus", spanner.Key{testData.ID}, []string{"ID", "Status", "NestedField"})
 	if err != nil {
 		t.Fatalf("failed to read row: %v", err)
 	}
@@ -672,6 +679,15 @@ func TestMigrationWithProto(t *testing.T) {
 	}
 	if want, got := "STATUS_ACTIVE", readData.Status.String(); want != got {
 		t.Errorf("want Status string %s, but got %s", want, got)
+	}
+	if want, got := testData.NestedField.Field.Value, readData.NestedField.Field.Value; want != got {
+		t.Errorf("want nested value %v, but got %v", want, got)
+	}
+	if want, got := testData.NestedField.Field.Status, readData.NestedField.Field.Status; want != got {
+		t.Errorf("want nested status %v, but got %v", want, got)
+	}
+	if want, got := "STATUS_SKIPPED", readData.NestedField.Field.Status.String(); want != got {
+		t.Errorf("want nested status string %v, but got %v", want, got)
 	}
 }
 

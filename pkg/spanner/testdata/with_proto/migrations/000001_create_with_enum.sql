@@ -1,5 +1,10 @@
-CREATE PROTO BUNDLE (`status.Status`);
+CREATE PROTO BUNDLE (
+    types.Status,
+    types.ComplexType,
+    types.NestedComplexType
+);
 CREATE TABLE TableWithStatus (
     ID STRING(36) NOT NULL,
-    Status status.Status
+    Status types.Status,
+    NestedField types.NestedComplexType,
 ) PRIMARY KEY (ID);

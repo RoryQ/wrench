@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/roryq/wrench/internal/fs"
 	"github.com/roryq/wrench/pkg/core"
 	"github.com/roryq/wrench/pkg/spanner"
 	"github.com/spf13/cobra"
@@ -81,7 +82,19 @@ func apply(c *cobra.Command, _ []string) error {
 			}
 		}
 
-		err = client.ApplyDDLFile(ctx, ddl, placeholderOptions)
+		var protoDescriptor []byte
+		protoDescriptorFile := protoDescriptorFilePath(c)
+		if protoDescriptorFile != "" {
+			protoDescriptor, err = fs.ReadFile(ctx, protoDescriptorFile)
+			if err != nil {
+				return &Error{
+					err: err,
+					cmd: c,
+				}
+			}
+		}
+
+		err = client.ApplyDDLFile(ctx, ddl, placeholderOptions, protoDescriptor)
 		if err != nil {
 			return &Error{
 				err: err,
@@ -123,4 +136,5 @@ func init() {
 	applyCmd.PersistentFlags().StringVar(&dmlFile, flagDMLFile, "", "DML file to be applied")
 	applyCmd.PersistentFlags().BoolVar(&partitioned, flagPartitioned, false, "Whether given DML should be executed as a Partitioned-DML or not")
 	applyCmd.Flags().Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement for ${PROJECT_ID}, ${INSTANCE_ID} and ${DATABASE_ID}")
+	applyCmd.PersistentFlags().String(flagProtoDescriptorFile, "", "Proto descriptor file to be used with DDL operations")
 }

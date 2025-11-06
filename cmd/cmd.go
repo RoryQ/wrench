@@ -49,6 +49,7 @@ const (
 	flagPartitioned               = "partitioned"
 	flagSpannerEmulatorImage      = "spanner-emulator-image"
 	flagPlaceholderReplacement    = "placeholder-replacement"
+	flagProtoDescriptorFile       = "proto-descriptor-file"
 	defaultSchemaFileName         = "schema.sql"
 	defaultStaticDataTablesFile   = "{wrench.json|static_data_tables.txt}"
 )
@@ -86,5 +87,20 @@ func staticDataTablesFilePath(c *cobra.Command) string {
 	if filename == "" {
 		filename = defaultStaticDataTablesFile
 	}
+	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
+}
+
+func protoDescriptorFilePath(c *cobra.Command) string {
+	var filename string
+
+	// Try to get the flag value from the specific command
+	if flag := c.Flag(flagProtoDescriptorFile); flag != nil {
+		filename = flag.Value.String()
+	}
+
+	if filename == "" {
+		return ""
+	}
+
 	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
 }

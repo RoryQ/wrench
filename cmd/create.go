@@ -49,7 +49,7 @@ func create(c *cobra.Command, _ []string) error {
 		}
 	}
 
-	err = client.CreateDatabase(ctx, ddl)
+	err = client.CreateDatabase(ctx, ddl, nil)
 	if err != nil {
 		return &Error{
 			err: err,

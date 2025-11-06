@@ -1,5 +1,10 @@
 .PHONY: test
-test: _spanner-up
+test:
+	@make _spanner-up
+	S_SPANNER_PORT=$$(docker port spanner-tests 9010 | head -1 | cut -d: -f2); \
+	SPANNER_EMULATOR_HOST=localhost:$$S_SPANNER_PORT \
+	SPANNER_PROJECT_ID=$(S_PROJECT) \
+	SPANNER_INSTANCE_ID=$(S_INSTANCE) \
 	go test -race -v -count=1 ./...
 	-@make _spanner-down
 
@@ -26,6 +31,10 @@ _spanner-up:
 	@docker run --rm --detach -p 9010 -p 9020 \
 		--env SPANNER_PROJECT_ID=$(S_PROJECT) \
 		--env SPANNER_INSTANCE_ID=$(S_INSTANCE) \
+		--env HTTP_PROXY="" \
+		--env http_proxy="" \
+        --env HTTPS_PROXY="" \
+        --env https_proxy="" \
 		--name spanner-tests \
 		roryq/spanner-emulator:latest >/dev/null 2>&1
 	@sleep 2
@@ -34,11 +43,5 @@ _spanner-up:
 _spanner-down:
 	-@docker stop spanner-tests >/dev/null 2>&1
 
-S_SPANNER_PORT = $(shell docker port spanner-tests 9010 | sed 's/0.0.0.0/localhost/')
 S_PROJECT = test-project
 S_INSTANCE = my-instance
-
-test: export SPANNER_EMULATOR_HOST=$(S_SPANNER_PORT)
-test: export SPANNER_PROJECT_ID=$(S_PROJECT)
-test: export SPANNER_INSTANCE_ID=$(S_INSTANCE)
-

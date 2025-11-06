@@ -28,6 +28,8 @@ type migrateOptions struct {
 	Placeholders map[string]string
 	// PlaceholdersEnabled is used to enable or disable placeholder substitition within migration files.
 	PlaceholdersEnabled bool
+
+	ProtoDescriptors []byte
 }
 
 func defaultMigrateOptions() *migrateOptions {
@@ -40,6 +42,7 @@ func defaultMigrateOptions() *migrateOptions {
 		DetectPartitionedDML: false,
 		Placeholders:         map[string]string{},
 		PlaceholdersEnabled:  false,
+		ProtoDescriptors:     nil,
 	}
 }
 
@@ -126,6 +129,14 @@ func DefaultPlaceholders(projectID, instanceID, databaseID string) map[string]st
 		"PROJECT_ID":  projectID,
 		"INSTANCE_ID": instanceID,
 		"DATABASE_ID": databaseID,
+	}
+}
+
+// WithProtoDescriptors sets proto descriptors to use for the migration
+func WithProtoDescriptors(protoDescriptors []byte) MigrateOpt {
+	return func(opt *migrateOptions) error {
+		opt.ProtoDescriptors = protoDescriptors
+		return nil
 	}
 }
 

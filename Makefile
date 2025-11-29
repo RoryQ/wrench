@@ -1,3 +1,5 @@
+RUN ?= .*
+
 .PHONY: test
 test:
 	@make _spanner-up
@@ -5,7 +7,7 @@ test:
 	SPANNER_EMULATOR_HOST=localhost:$$S_SPANNER_PORT \
 	SPANNER_PROJECT_ID=$(S_PROJECT) \
 	SPANNER_INSTANCE_ID=$(S_INSTANCE) \
-	go test -race -v -count=1 ./...
+	go test -race -v -count=1 ./... -run=$(RUN)
 	-@make _spanner-down
 
 .PHONY: README.md

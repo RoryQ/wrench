@@ -95,12 +95,12 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 	var migrationsOutput spanner.MigrationsOutput
 	switch status {
 	case spanner.ExistingMigrationsUpgradeStarted:
-		migrationsOutput, err = client.UpgradeExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName, options.ProtoDescriptors)
+		migrationsOutput, err = client.UpgradeExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName, options.ProtoDescriptors, options.FFMigrations)
 		if err != nil {
 			return err
 		}
 	case spanner.ExistingMigrationsUpgradeCompleted:
-		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors)
+		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors, options.FFMigrations)
 		if err != nil {
 			return err
 		}

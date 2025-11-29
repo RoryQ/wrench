@@ -30,6 +30,10 @@ type migrateOptions struct {
 	PlaceholdersEnabled bool
 
 	ProtoDescriptors []byte
+
+	// FFMigrations enables fast-forward migrations by aggregating contiguous non-applied migrations
+	// of the same type into a single UpdateDatabaseDdlRequest.
+	FFMigrations bool
 }
 
 func defaultMigrateOptions() *migrateOptions {
@@ -136,6 +140,15 @@ func DefaultPlaceholders(projectID, instanceID, databaseID string) map[string]st
 func WithProtoDescriptors(protoDescriptors []byte) MigrateOpt {
 	return func(opt *migrateOptions) error {
 		opt.ProtoDescriptors = protoDescriptors
+		return nil
+	}
+}
+
+// WithFFMigrations enables fast-forward migrations by aggregating contiguous non-applied migrations
+// of the same type into a single UpdateDatabaseDdlRequest.
+func WithFFMigrations(enabled bool) MigrateOpt {
+	return func(opt *migrateOptions) error {
+		opt.FFMigrations = enabled
 		return nil
 	}
 }

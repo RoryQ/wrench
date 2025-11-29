@@ -24,7 +24,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -497,13 +499,13 @@ func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string, c
 	return numAffectedRows.Load(), nil
 }
 
-func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, protoDescriptors []byte) (MigrationsOutput, error) {
+func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, protoDescriptors []byte, ffMigrations bool) (MigrationsOutput, error) {
 	err := c.backfillMigrations(ctx, migrations, tableName)
 	if err != nil {
 		return nil, err
 	}
 
-	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName, 1, protoDescriptors)
+	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName, 1, protoDescriptors, ffMigrations)
 	if err != nil {
 		return nil, err
 	}
@@ -632,7 +634,7 @@ func (i MigrationsOutput) String() string {
 	return fmt.Sprintf("%s\n", output)
 }
 
-func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int, protoDescriptors []byte) (MigrationsOutput, error) {
+func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int, protoDescriptors []byte, ffMigrations bool) (MigrationsOutput, error) {
 	sort.Sort(migrations)
 
 	version, dirty, err := c.GetSchemaMigrationVersion(ctx, tableName)
@@ -668,6 +670,12 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 
 	var migrationsOutput MigrationsOutput = make(MigrationsOutput)
 	var count int
+
+	// Special path for fast-forwarding through migrations
+	if ffMigrations {
+		return c.executeFFMigrations(ctx, migrations, limit, tableName, partitionedConcurrency, protoDescriptors, applied, version)
+	}
+
 	for _, m := range migrations {
 		if limit == 0 {
 			break
@@ -760,6 +768,234 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 	}
 
 	return migrationsOutput, nil
+}
+
+// migrationBatch represents a group of contiguous migrations of the same type
+type migrationBatch struct {
+	migrations []*Migration
+	kind       StatementKind
+}
+
+// statements aggregates all SQL statements from all migrations in the batch
+func (b *migrationBatch) statements() []string {
+	var allStatements []string
+	for _, m := range b.migrations {
+		allStatements = append(allStatements, m.Statements...)
+	}
+	return allStatements
+}
+
+// versions returns a slice of all migration versions in the batch
+func (b *migrationBatch) versions() []uint {
+	versions := make([]uint, len(b.migrations))
+	for i, m := range b.migrations {
+		versions[i] = m.Version
+	}
+	return versions
+}
+
+// hasOutOfOrderMigrations checks if there are any out-of-order or backfill migrations.
+// Fast-forward mode is only safe when all unapplied migrations are contiguous from the current version.
+func hasOutOfOrderMigrations(migrations Migrations, applied map[int64]bool) bool {
+	appliedVersions := slices.Sorted(maps.Keys(applied))
+
+	// all applied versions must match the initial segment of migrations otherwise there are out-of-order migrations
+	for i, version := range appliedVersions {
+		if migrations[i].Version != uint(version) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// executeFFMigrations executes migrations with fast-forward optimization by batching contiguous
+// DDL migrations into single UpdateDatabaseDdlRequest calls.
+func (c *Client) executeFFMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int, protoDescriptors []byte, applied map[int64]bool, currentVersion uint) (MigrationsOutput, error) {
+	// Fast-forward is only safe when applying migrations forward from the current version
+	// Check if there are any gaps or out-of-order migrations
+	if hasOutOfOrderMigrations(migrations, applied) {
+		return nil, &Error{
+			Code: ErrorCodeExecuteMigrations,
+			err:  errors.New("out-of-order or backfill migrations detected. Fast-forward mode requires contiguous migrations from current version. Please run without --ff-migrations flag for backfill scenarios"),
+		}
+	}
+
+	var migrationsOutput MigrationsOutput = make(MigrationsOutput)
+	var count int
+
+	// Group contiguous non-applied migrations by type
+	batches := groupMigrationsByType(migrations, applied, limit)
+
+	if len(batches) > 0 {
+		fmt.Printf("Fast-forward migrations enabled: grouped into %d batch(es)\n", len(batches))
+	}
+
+	for _, batch := range batches {
+		if limit >= 0 && count >= limit {
+			break
+		}
+
+		// Log batch information
+		if len(batch.migrations) > 1 {
+			fmt.Printf("Batching %d %s migrations:\n", len(batch.migrations), batch.kind)
+			for _, m := range batch.migrations {
+				if m.Name != "" {
+					fmt.Printf("  - %d: %s\n", m.Version, m.Name)
+				} else {
+					fmt.Printf("  - %d\n", m.Version)
+				}
+			}
+		}
+
+		// Mark all migrations in batch as dirty before execution
+		for _, m := range batch.migrations {
+			if err := c.setSchemaMigrationVersion(ctx, m.Version, true, tableName); err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+		}
+
+		// Execute the batch based on its type
+		switch batch.kind {
+		case StatementKindDDL:
+			if len(batch.migrations) > 1 {
+				fmt.Printf("Applying versions %v in a single UpdateDatabaseDdlRequest\n", batch.versions())
+			}
+
+			if err := c.ApplyDDL(ctx, batch.statements(), protoDescriptors); err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+
+		case StatementKindDML:
+			for _, m := range batch.migrations {
+				rowsAffected, err := c.ApplyDML(ctx, m.Statements)
+				if err != nil {
+					return nil, &Error{
+						Code: ErrorCodeExecuteMigrations,
+						err:  err,
+					}
+				}
+				migrationsOutput[m.FileName] = migrationInfo{
+					RowsAffected: rowsAffected,
+				}
+			}
+
+		case StatementKindPartitionedDML:
+			for _, m := range batch.migrations {
+				rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements, partitionedConcurrency)
+				if err != nil {
+					return nil, &Error{
+						Code: ErrorCodeExecuteMigrations,
+						err:  err,
+					}
+				}
+				migrationsOutput[m.FileName] = migrationInfo{
+					RowsAffected: rowsAffected,
+				}
+			}
+
+		case StatementKindConvergentDML:
+			for _, m := range batch.migrations {
+				rowsAffected, err := convergentApply(ctx, c.ApplyDML, m.Statements, m.Directives.Concurrency)
+				if err != nil {
+					return nil, &Error{
+						Code: ErrorCodeExecuteMigrations,
+						err:  err,
+					}
+				}
+				migrationsOutput[m.FileName] = migrationInfo{
+					RowsAffected: rowsAffected,
+				}
+			}
+
+		default:
+			return nil, &Error{
+				Code: ErrorCodeExecuteMigrations,
+				err:  fmt.Errorf("Unknown query type in batch"),
+			}
+		}
+
+		// Mark all migrations in batch as clean and print status
+		for _, m := range batch.migrations {
+			if m.Name != "" {
+				fmt.Printf("%d/up %s\n", m.Version, m.Name)
+			} else {
+				fmt.Printf("%d/up\n", m.Version)
+			}
+
+			if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+
+			count++
+			if limit >= 0 && count >= limit {
+				break
+			}
+		}
+	}
+
+	if count == 0 {
+		fmt.Println("no change")
+	}
+
+	return migrationsOutput, nil
+}
+
+// groupMigrationsByType groups contiguous non-applied migrations by their statement kind
+func groupMigrationsByType(migrations Migrations, applied map[int64]bool, limit int) []migrationBatch {
+	var batches []migrationBatch
+	var currentBatch *migrationBatch
+	count := 0
+
+	for _, m := range migrations {
+		if limit >= 0 && count >= limit {
+			break
+		}
+
+		if applied[int64(m.Version)] {
+			// Migration already applied, finalize current batch if exists
+			if currentBatch != nil && len(currentBatch.migrations) > 0 {
+				batches = append(batches, *currentBatch)
+				currentBatch = nil
+			}
+			continue
+		}
+
+		// Determine the effective kind (considering directives)
+		effectiveKind := cmp.Or(m.Directives.StatementKind, m.Kind)
+
+		if currentBatch == nil || currentBatch.kind != effectiveKind {
+			// Start a new batch
+			if currentBatch != nil && len(currentBatch.migrations) > 0 {
+				batches = append(batches, *currentBatch)
+			}
+			currentBatch = &migrationBatch{
+				migrations: []*Migration{m},
+				kind:       effectiveKind,
+			}
+		} else {
+			// Add to current batch
+			currentBatch.migrations = append(currentBatch.migrations, m)
+		}
+
+		count++
+	}
+
+	// Add the last batch if it exists
+	if currentBatch != nil && len(currentBatch.migrations) > 0 {
+		batches = append(batches, *currentBatch)
+	}
+
+	return batches
 }
 
 func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string) (uint, bool, error) {

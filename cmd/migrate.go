@@ -30,8 +30,9 @@ import (
 	"strings"
 
 	"github.com/kennygrant/sanitize"
-	"github.com/roryq/wrench/internal/fs"
 	"github.com/spf13/cobra"
+
+	"github.com/roryq/wrench/internal/fs"
 
 	"github.com/roryq/wrench/pkg/core"
 	"github.com/roryq/wrench/pkg/spanner"
@@ -85,7 +86,6 @@ func init() {
 		Long:  "Call once to enable the migration lock. Call again to reset the lock if a failure caused it not to release",
 		RunE:  migrateLocker,
 	}
-	migrateUpCmd.Flags().String(flagProtoDescriptorFile, "", "Proto descriptor file to be used with migrations")
 
 	migrateCmd.AddCommand(
 		migrateCreateCmd,
@@ -103,6 +103,8 @@ func init() {
 	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
 	migrateUpCmd.Flags().UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")
 	migrateUpCmd.Flags().Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement for ${PROJECT_ID}, ${INSTANCE_ID} and ${DATABASE_ID}")
+	migrateUpCmd.Flags().String(flagProtoDescriptorFile, "", "Proto descriptor file to be used with migrations")
+	migrateUpCmd.Flags().Bool(flagFFMigrations, false, "Fast-forward migrations by batching contiguous DDL migrations into a request. Intended for dev environments.")
 }
 
 func migrateCreate(c *cobra.Command, args []string) error {
@@ -194,6 +196,14 @@ func migrateUp(c *cobra.Command, args []string) error {
 		}
 	}
 
+	ffMigrations, err := c.Flags().GetBool(flagFFMigrations)
+	if err != nil {
+		return &Error{
+			cmd: c,
+			err: err,
+		}
+	}
+
 	migrationsDir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
 	err = core.MigrateUp(ctx, client, migrationsDir,
 		core.WithLimit(limit),
@@ -211,6 +221,7 @@ func migrateUp(c *cobra.Command, args []string) error {
 			c.Flag(flagNameDatabase).Value.String(),
 		),
 		core.WithProtoDescriptors(protoDescriptor),
+		core.WithFFMigrations(ffMigrations),
 	)
 
 	if err != nil {

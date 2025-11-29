@@ -50,6 +50,7 @@ const (
 	flagSpannerEmulatorImage      = "spanner-emulator-image"
 	flagPlaceholderReplacement    = "placeholder-replacement"
 	flagProtoDescriptorFile       = "proto-descriptor-file"
+	flagFFMigrations              = "ff-migrations"
 	defaultSchemaFileName         = "schema.sql"
 	defaultStaticDataTablesFile   = "{wrench.json|static_data_tables.txt}"
 )

@@ -10,7 +10,7 @@ require (
 	github.com/kennygrant/sanitize v1.2.4
 	github.com/ory/dockertest/v3 v3.12.0
 	github.com/sourcegraph/conc v0.3.0
-	github.com/spf13/cobra v1.10.1
+	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.257.0

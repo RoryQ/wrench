@@ -27,9 +27,11 @@ jobs:
       SPANNER_EMULATOR_HOST: localhost:9010
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
       - name: Test

@@ -20,6 +20,8 @@
 package spanner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +45,9 @@ var (
 	// 001_name.up.sql
 	// 001_name.generated.sql
 	migrationFileRegex = regexp.MustCompile(`^([0-9]+)(?:_([a-zA-Z0-9_\-]+))?(?:[.]up|[.]generated)?\.sql$`)
+
+	// repeatableMigrationRegex matches patterns like R__name.sql
+	repeatableMigrationRegex = regexp.MustCompile(`(?i)^R__([a-zA-Z0-9_\-]+)\.sql$`)
 
 	MigrationNameRegex = regexp.MustCompile(`[a-zA-Z0-9_\-]+`)
 
@@ -86,6 +91,10 @@ type (
 
 		// Directives defines config scoped to a single migration.
 		Directives MigrationDirectives
+
+		IsRepeatable bool
+
+		Checksum string
 	}
 
 	// MigrationDirectives configures how the migration should be executed.
@@ -120,6 +129,12 @@ func (ms Migrations) Swap(i, j int) {
 }
 
 func (ms Migrations) Less(i, j int) bool {
+	if ms[i].IsRepeatable != ms[j].IsRepeatable {
+		return !ms[i].IsRepeatable
+	}
+	if ms[i].IsRepeatable {
+		return ms[i].Name < ms[j].Name
+	}
 	return ms[i].Version < ms[j].Version
 }
 
@@ -140,17 +155,27 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool, p
 			continue
 		}
 
-		matches := migrationFileRegex.FindStringSubmatch(f.Name())
-		if matches == nil {
-			continue
-		}
+		var version uint64
+		var name string
+		var isRepeatable bool
 
-		version, err := strconv.ParseUint(matches[1], 10, 64)
-		if err != nil {
-			continue
-		}
-
-		if toSkipMap[version] {
+		if matches := migrationFileRegex.FindStringSubmatch(f.Name()); matches != nil {
+			v, err := strconv.ParseUint(matches[1], 10, 64)
+			if err != nil {
+				continue
+			}
+			if v == 0 {
+				return nil, fmt.Errorf("migration %s has invalid version 0; versioned migrations must start at 1", f.Name())
+			}
+			if toSkipMap[v] {
+				continue
+			}
+			version = v
+			name = matches[2]
+		} else if matches := repeatableMigrationRegex.FindStringSubmatch(f.Name()); matches != nil {
+			isRepeatable = true
+			name = matches[1]
+		} else {
 			continue
 		}
 
@@ -182,19 +207,37 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool, p
 			return nil, err
 		}
 
+		hash := sha256.New()
+		for _, stmt := range statements {
+			// Normalize line endings to LF to ensure consistent checksums across platforms
+			normalized := strings.ReplaceAll(stmt, "\r\n", "\n")
+			hash.Write([]byte(normalized))
+		}
+		checksum := hex.EncodeToString(hash.Sum(nil))
+
 		migrations = append(migrations, &Migration{
-			Version:    uint(version),
-			Name:       matches[2],
-			FileName:   f.Name(),
-			Statements: statements,
-			Kind:       kind,
-			Directives: directives,
+			Version:      uint(version),
+			Name:         name,
+			FileName:     f.Name(),
+			Statements:   statements,
+			Kind:         kind,
+			Directives:   directives,
+			IsRepeatable: isRepeatable,
+			Checksum:     checksum,
 		})
 	}
 
 	sort.Sort(migrations)
 	seen := map[uint]*Migration{}
+	seenRepeatable := map[string]*Migration{}
 	for _, m := range migrations {
+		if m.IsRepeatable {
+			if dupe, got := seenRepeatable[m.Name]; got {
+				return nil, fmt.Errorf("repeatable migration %s has a duplicate name in file %s", m.Name, dupe.FileName)
+			}
+			seenRepeatable[m.Name] = m
+			continue
+		}
 		if dupe, got := seen[m.Version]; got {
 			return nil, fmt.Errorf("migration %d %s has a duplicate version number of %s", m.Version, m.Name, dupe.Name)
 		}

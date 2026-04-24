@@ -124,4 +124,3 @@ func Test_writeDDL(t *testing.T) {
 		})
 	}
 }
-

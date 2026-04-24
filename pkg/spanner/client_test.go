@@ -100,6 +100,101 @@ func TestLoadDDL(t *testing.T) {
 	}
 }
 
+func TestExecuteRepeatableMigrations(t *testing.T) {
+	ctx := context.Background()
+
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	repeatableTableName := "RepeatableHistory"
+	err := client.EnsureRepeatableMigrationTable(ctx, repeatableTableName)
+	require.NoError(t, err)
+
+	migrations := Migrations{
+		{
+			Name:         "create_view",
+			FileName:     "R__create_view.sql",
+			IsRepeatable: true,
+			Statements:   []string{"CREATE VIEW SingerNames SQL SECURITY INVOKER AS SELECT 1 AS Col1"},
+			Checksum:     "hash1",
+			Kind:         StatementKindDDL,
+		},
+	}
+
+	// 1. Initial execution
+	output, err := client.ExecuteRepeatableMigrations(ctx, migrations, repeatableTableName, 1, nil)
+	require.NoError(t, err)
+	assert.Len(t, output, 1)
+	assert.Contains(t, output, "R__create_view.sql")
+
+	// 2. Second execution with same checksum should be skipped
+	output, err = client.ExecuteRepeatableMigrations(ctx, migrations, repeatableTableName, 1, nil)
+	require.NoError(t, err)
+	assert.Empty(t, output)
+
+	// 3. Execution with different checksum should run again
+	migrations[0].Checksum = "hash2"
+	migrations[0].Statements = []string{"CREATE OR REPLACE VIEW SingerNames SQL SECURITY INVOKER AS SELECT 2 AS Col1"}
+	output, err = client.ExecuteRepeatableMigrations(ctx, migrations, repeatableTableName, 1, nil)
+	require.NoError(t, err)
+	assert.Len(t, output, 1)
+
+	// 4. Verify that it errors if a non-repeatable migration is passed
+	nonRepeatable := Migrations{
+		{
+			Version:      1,
+			FileName:     "001.sql",
+			IsRepeatable: false,
+		},
+	}
+	_, err = client.ExecuteRepeatableMigrations(ctx, nonRepeatable, repeatableTableName, 1, nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "is not a repeatable migration")
+}
+
+func TestExecuteRepeatableMigrations_EndToEnd(t *testing.T) {
+	ctx := context.Background()
+
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	repeatableTableName := "RepeatableHistoryEndToEnd"
+	err := client.EnsureRepeatableMigrationTable(ctx, repeatableTableName)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+
+	// 1. Initial run
+	migrationFile := filepath.Join(dir, "R__view.sql")
+	content1 := "CREATE VIEW MyView SQL SECURITY INVOKER AS SELECT 1 AS Col1"
+	require.NoError(t, os.WriteFile(migrationFile, []byte(content1), 0o644))
+
+	ms, err := LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	require.NoError(t, err)
+	require.Len(t, ms, 1)
+
+	output, err := client.ExecuteRepeatableMigrations(ctx, ms, repeatableTableName, 1, nil)
+	require.NoError(t, err)
+	assert.Len(t, output, 1)
+
+	// 2. Second run (no change)
+	ms, err = LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	require.NoError(t, err)
+	output, err = client.ExecuteRepeatableMigrations(ctx, ms, repeatableTableName, 1, nil)
+	require.NoError(t, err)
+	assert.Empty(t, output)
+
+	// 3. Third run (content changed)
+	content2 := "CREATE OR REPLACE VIEW MyView SQL SECURITY INVOKER AS SELECT 2 AS Col1"
+	require.NoError(t, os.WriteFile(migrationFile, []byte(content2), 0o644))
+
+	ms, err = LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	require.NoError(t, err)
+	output, err = client.ExecuteRepeatableMigrations(ctx, ms, repeatableTableName, 1, nil)
+	require.NoError(t, err)
+	assert.Len(t, output, 1)
+}
+
 func TestApplyDDLFile(t *testing.T) {
 	ctx := context.Background()
 
@@ -392,6 +487,31 @@ func ensureMigrationColumn(t *testing.T, ctx context.Context, client *Client, co
 	if want, got := isNullable, c.IsNullable; want != got {
 		t.Errorf("want %s, but got %s", want, got)
 	}
+}
+
+func TestGetRepeatableMigrationHistory(t *testing.T) {
+	ctx := context.Background()
+
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	repeatableTableName := "RepeatableHistory"
+	err := client.EnsureRepeatableMigrationTable(ctx, repeatableTableName)
+	require.NoError(t, err)
+
+	checksum := "abc123def"
+	name := "my_view"
+	_, err = client.spannerClient.Apply(ctx, []*spanner.Mutation{
+		spanner.InsertOrUpdate(repeatableTableName, []string{"Name", "Checksum", "AppliedAt"}, []interface{}{name, checksum, spanner.CommitTimestamp}),
+	})
+	require.NoError(t, err)
+
+	history, err := client.GetRepeatableMigrationHistory(ctx, repeatableTableName)
+	require.NoError(t, err)
+	require.Len(t, history, 1)
+	assert.Equal(t, name, history[0].Name)
+	assert.Equal(t, checksum, history[0].Checksum)
+	assert.False(t, history[0].AppliedAt.IsZero())
 }
 
 func ensureMigrationHistoryRecord(t *testing.T, ctx context.Context, client *Client, version int64, dirty bool) {

@@ -21,10 +21,12 @@ package spanner
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -373,6 +375,37 @@ func Test_migrationFileRegex(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			matches := migrationFileRegex.FindStringSubmatch(tc.input)
+			assert.Equal(t, tc.expected, matches)
+		})
+	}
+}
+
+func Test_repeatableMigrationRegex(t *testing.T) {
+	tests := map[string]struct {
+		input    string
+		expected []string
+	}{
+		"Uppercase": {
+			input:    "R__name.sql",
+			expected: []string{"R__name.sql", "name"},
+		},
+		"Lowercase": {
+			input:    "r__name.sql",
+			expected: []string{"r__name.sql", "name"},
+		},
+		"MixedWithDashesAndUnderscores": {
+			input:    "r__My-Name_123.sql",
+			expected: []string{"r__My-Name_123.sql", "My-Name_123"},
+		},
+		"NoMatchVersioned": {
+			input:    "001_name.sql",
+			expected: nil,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			matches := repeatableMigrationRegex.FindStringSubmatch(tc.input)
 			assert.Equal(t, tc.expected, matches)
 		})
 	}
@@ -1021,4 +1054,78 @@ block 3`,
 			assert.Equal(t, tt.want, extractPreamble(tt.data))
 		})
 	}
+}
+
+func TestLoadMigrationsRejectsVersionZero(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "0_initial.sql"), []byte("SELECT 1;"), 0o644))
+
+	_, err := LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid version 0")
+}
+
+func TestLoadMigrationsRepeatable(t *testing.T) {
+	dir := t.TempDir()
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "100_standard.sql"), []byte("SELECT 1;"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "R__create_view.sql"), []byte("CREATE VIEW SingerNames AS SELECT FirstName, LastName FROM Singers;"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "R__another.sql"), []byte("SELECT 2;"), 0o644))
+
+	ms, err := LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	assert.NoError(t, err)
+	assert.Len(t, ms, 3)
+
+	// 100_standard.sql should be first (versioned)
+	assert.Equal(t, uint(100), ms[0].Version)
+	assert.False(t, ms[0].IsRepeatable)
+
+	// Repeatable migrations should follow, sorted by name
+	assert.Equal(t, "another", ms[1].Name)
+	assert.True(t, ms[1].IsRepeatable)
+
+	assert.Equal(t, "create_view", ms[2].Name)
+	assert.True(t, ms[2].IsRepeatable)
+
+	// Verify checksum
+	assert.NotEmpty(t, ms[2].Checksum)
+}
+
+func TestLoadMigrationsSorting(t *testing.T) {
+	dir := t.TempDir()
+	// Mix of versioned and repeatable
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "002_second.sql"), []byte("SELECT 2;"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "001_first.sql"), []byte("SELECT 1;"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "R__b.sql"), []byte("SELECT 'b';"), 0o644))
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "R__a.sql"), []byte("SELECT 'a';"), 0o644))
+
+	ms, err := LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	assert.NoError(t, err)
+	require.Len(t, ms, 4)
+
+	// Sort order should be:
+	// 1. 001_first.sql
+	// 2. 002_second.sql
+	// 3. R__a.sql
+	// 4. R__b.sql
+	assert.Equal(t, uint(1), ms[0].Version)
+	assert.Equal(t, uint(2), ms[1].Version)
+	assert.Equal(t, "a", ms[2].Name)
+	assert.Equal(t, "b", ms[3].Name)
+}
+
+func TestLoadMigrationsRepeatableLineEndings(t *testing.T) {
+	dir := t.TempDir()
+
+	contentLF := "CREATE VIEW SingerNames AS SELECT FirstName, LastName FROM Singers;\n"
+	contentCRLF := "CREATE VIEW SingerNames AS SELECT FirstName, LastName FROM Singers;\r\n"
+
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "R__view.sql"), []byte(contentLF), 0o644))
+	msLF, err := LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	assert.NoError(t, err)
+
+	assert.NoError(t, os.WriteFile(filepath.Join(dir, "R__view.sql"), []byte(contentCRLF), 0o644))
+	msCRLF, err := LoadMigrations(dir, nil, false, PlaceholderOptions{})
+	assert.NoError(t, err)
+
+	assert.Equal(t, msLF[0].Checksum, msCRLF[0].Checksum, "checksums should be equal regardless of line endings")
 }

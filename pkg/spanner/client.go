@@ -54,6 +54,7 @@ const (
 	ddlStatementsSeparator             = ";"
 	upgradeIndicator                   = "wrench_upgrade_indicator"
 	historyStr                         = "History"
+	repeatableHistoryStr               = "RepeatableHistory"
 	lockStr                            = "Lock"
 	FirstRun                           = UpgradeStatus("FirstRun")
 	ExistingMigrationsNoUpgrade        = UpgradeStatus("NoUpgrade")
@@ -113,6 +114,16 @@ type MigrationHistoryRecord struct {
 	Dirty    bool      `spanner:"Dirty"`
 	Created  time.Time `spanner:"Created"`
 	Modified time.Time `spanner:"Modified"`
+}
+
+type RepeatableMigrationHistoryRecord struct {
+	Name      string    `spanner:"Name"`
+	Checksum  string    `spanner:"Checksum"`
+	AppliedAt time.Time `spanner:"AppliedAt"`
+}
+
+func RepeatableHistoryTableName(versionTableName string) string {
+	return versionTableName + repeatableHistoryStr
 }
 
 func NewClient(ctx context.Context, config *Config) (*Client, error) {
@@ -833,6 +844,29 @@ func (c *Client) GetMigrationHistory(ctx context.Context, versionTableName strin
 	return history, nil
 }
 
+func (c *Client) GetRepeatableMigrationHistory(ctx context.Context, tableName string) ([]RepeatableMigrationHistoryRecord, error) {
+	if !c.tableExists(ctx, tableName) {
+		return nil, nil
+	}
+
+	history := make([]RepeatableMigrationHistoryRecord, 0)
+	stmt := spanner.NewStatement("SELECT Name, Checksum, AppliedAt FROM " + tableName)
+	err := c.spannerClient.Single().Query(ctx, stmt).Do(func(r *spanner.Row) error {
+		record := RepeatableMigrationHistoryRecord{}
+		if err := r.ToStruct(&record); err != nil {
+			return err
+		}
+		history = append(history, record)
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return history, nil
+}
+
 type MigrationsOutput map[string]migrationInfo
 
 type migrationInfo struct {
@@ -991,6 +1025,99 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 
 	if count == 0 {
 		fmt.Println("no change")
+	}
+
+	return migrationsOutput, nil
+}
+
+func (c *Client) ExecuteRepeatableMigrations(ctx context.Context, migrations Migrations, tableName string, partitionedConcurrency int, protoDescriptors []byte) (MigrationsOutput, error) {
+	if len(migrations) == 0 {
+		return nil, nil
+	}
+
+	for _, m := range migrations {
+		if !m.IsRepeatable {
+			return nil, &Error{
+				Code: ErrorCodeExecuteMigrations,
+				err:  fmt.Errorf("migration %s is not a repeatable migration", m.FileName),
+			}
+		}
+	}
+
+	history, err := c.GetRepeatableMigrationHistory(ctx, tableName)
+	if err != nil {
+		return nil, &Error{
+			Code: ErrorCodeExecuteMigrations,
+			err:  err,
+		}
+	}
+	applied := make(map[string]string, len(history))
+	for _, h := range history {
+		applied[h.Name] = h.Checksum
+	}
+
+	migrationsOutput := make(MigrationsOutput)
+	for _, m := range migrations {
+		if appliedChecksum, ok := applied[m.Name]; ok && appliedChecksum == m.Checksum {
+			continue
+		}
+
+		statementKind := cmp.Or(m.Directives.StatementKind, m.Kind)
+		var rowsAffected int64
+		switch statementKind {
+		case StatementKindDDL:
+			if err := c.ApplyDDL(ctx, m.Statements, protoDescriptors); err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+		case StatementKindDML:
+			count, err := c.ApplyDML(ctx, m.Statements)
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+			rowsAffected = count
+		case StatementKindPartitionedDML:
+			count, err := c.ApplyPartitionedDML(ctx, m.Statements, partitionedConcurrency)
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+			rowsAffected = count
+		case StatementKindConvergentDML:
+			count, err := convergentApply(ctx, c.ApplyDML, m.Statements, m.Directives.Concurrency)
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+			rowsAffected = count
+		default:
+			return nil, &Error{
+				Code: ErrorCodeExecuteMigrations,
+				err:  fmt.Errorf("Unknown query type, repeatable migration: %s", m.FileName),
+			}
+		}
+
+		_, err := c.spannerClient.Apply(ctx, []*spanner.Mutation{
+			spanner.InsertOrUpdate(tableName, []string{"Name", "Checksum", "AppliedAt"}, []interface{}{m.Name, m.Checksum, spanner.CommitTimestamp}),
+		})
+		if err != nil {
+			return nil, &Error{
+				Code: ErrorCodeExecuteMigrations,
+				err:  err,
+			}
+		}
+
+		fmt.Printf("R/up %s\n", m.Name)
+		migrationsOutput[m.FileName] = migrationInfo{RowsAffected: rowsAffected}
 	}
 
 	return migrationsOutput, nil
@@ -1396,6 +1523,20 @@ func (c *Client) EnsureMigrationTable(ctx context.Context, tableName string) err
 	}
 
 	return nil
+}
+
+func (c *Client) EnsureRepeatableMigrationTable(ctx context.Context, tableName string) error {
+	if c.tableExists(ctx, tableName) {
+		return nil
+	}
+
+	stmt := fmt.Sprintf(`CREATE TABLE %s (
+		Name STRING(MAX) NOT NULL,
+		Checksum STRING(64) NOT NULL,
+		AppliedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
+	) PRIMARY KEY(Name)`, tableName)
+
+	return c.ApplyDDL(ctx, []string{stmt}, nil)
 }
 
 func (c *Client) DetermineUpgradeStatus(ctx context.Context, tableName string) (UpgradeStatus, error) {

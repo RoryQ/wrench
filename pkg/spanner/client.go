@@ -220,7 +220,7 @@ func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, e
 
 	// Some tables might not exist in older emulator versions or different dialects
 	optionalQueries := []string{
-		"SELECT CHANGE_STREAM_NAME as Name, 'change stream' as Type FROM INFORMATION_SCHEMA.CHANGE_STREAMS WHERE CHANGE_STREAM_SCHEMA = ''",
+		"SELECT CHANGE_STREAM_NAME as Name, 'change_stream' as Type FROM INFORMATION_SCHEMA.CHANGE_STREAMS WHERE CHANGE_STREAM_SCHEMA = ''",
 		"SELECT SEQUENCE_NAME as Name, 'sequence' as Type FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = ''",
 		"SELECT MODEL_NAME as Name, 'model' as Type FROM INFORMATION_SCHEMA.MODELS WHERE MODEL_SCHEMA = ''",
 	}
@@ -271,7 +271,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 	for i, token := range tokens {
 		upperToken := strings.ToUpper(token)
 		switch upperToken {
-		case "TABLE", "VIEW", "MODEL", "SEQUENCE", "DATABASE":
+		case "TABLE", "VIEW", "MODEL", "SEQUENCE":
 			objectType = strings.ToLower(upperToken)
 			j := i + 1
 			// Skip "IF NOT EXISTS"
@@ -295,9 +295,37 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 			if j < len(tokens) {
 				objectName = tokens[j]
 			}
+		case "DATABASE":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "ROLE" {
+				objectType = "database_role"
+				if i+2 < len(tokens) {
+					objectName = tokens[i+2]
+				}
+			} else {
+				objectType = "database"
+				if i+1 < len(tokens) {
+					objectName = tokens[i+1]
+				}
+			}
 		case "CHANGE":
 			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "STREAM" {
-				objectType = "change stream"
+				objectType = "change_stream"
+				j := i + 2
+				if j < len(tokens) {
+					objectName = tokens[j]
+				}
+			}
+		case "SEARCH":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "INDEX" {
+				objectType = "search_index"
+				j := i + 2
+				if j < len(tokens) {
+					objectName = tokens[j]
+				}
+			}
+		case "PROPERTY":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "GRAPH" {
+				objectType = "property_graph"
 				j := i + 2
 				if j < len(tokens) {
 					objectName = tokens[j]
@@ -318,6 +346,8 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 			objectType = t
 		}
 	}
+
+	objectType = strings.ReplaceAll(objectType, " ", "_")
 
 	if objectType == "" || objectName == "" {
 		return ddl, errors.New("could not determine the object type or name")

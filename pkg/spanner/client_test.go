@@ -963,7 +963,7 @@ func Test_parseDDL(t *testing.T) {
 			wantDdl: SchemaDDL{
 				Statement:  "CREATE CHANGE STREAM MyStream FOR ALL",
 				Filename:   "mystream.sql",
-				ObjectType: "change stream",
+				ObjectType: "change_stream",
 			},
 		},
 		{

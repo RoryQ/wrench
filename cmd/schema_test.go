@@ -40,10 +40,10 @@ func Test_schema(t *testing.T) {
 	// replacements have been applied
 	assert.Contains(t, string(contentAIModelOutput), `endpoint = '//aiplatform.googleapis.com/projects/test-project/locations/us-central1/publishers/google/models/my-instance-database-model'`)
 
-	assert.DirExists(t, "testdata/schema_test/change stream")
-	assert.FileExists(t, "testdata/schema_test/change stream/alltables.sql")
+	assert.DirExists(t, "testdata/schema_test/change_stream")
+	assert.FileExists(t, "testdata/schema_test/change_stream/alltables.sql")
 
-	contentChangeStream, err := os.ReadFile("testdata/schema_test/change stream/alltables.sql")
+	contentChangeStream, err := os.ReadFile("testdata/schema_test/change_stream/alltables.sql")
 	assert.NoError(t, err)
 	assert.Contains(t, string(contentChangeStream), "CREATE CHANGE STREAM AllTables")
 
@@ -64,12 +64,12 @@ func cleanup(t *testing.T) {
 	os.RemoveAll("testdata/schema_test/table")
 	os.RemoveAll("testdata/schema_test/schema.sql")
 	os.RemoveAll("testdata/schema_test/model")
-	os.RemoveAll("testdata/schema_test/change stream")
+	os.RemoveAll("testdata/schema_test/change_stream")
 	os.RemoveAll("testdata/schema_test/sequence")
 	require.NoDirExists(t, "testdata/schema_test/table")
 	require.NoFileExists(t, "testdata/schema_test/schema.sql")
 	require.NoDirExists(t, "testdata/schema_test/model")
-	require.NoDirExists(t, "testdata/schema_test/change stream")
+	require.NoDirExists(t, "testdata/schema_test/change_stream")
 	require.NoDirExists(t, "testdata/schema_test/sequence")
 	require.NoFileExists(t, "testdata/schema_test/custom_ai_model.sql")
 }

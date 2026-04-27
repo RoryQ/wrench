@@ -25,7 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -36,7 +36,6 @@ import (
 	"github.com/sourcegraph/conc/pool"
 
 	"github.com/roryq/wrench/pkg/spannerz"
-	"github.com/roryq/wrench/pkg/xregexp"
 
 	"google.golang.org/grpc/codes"
 
@@ -64,8 +63,6 @@ const (
 
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
-	indexOptions              = `unique\s+|null_filtered\s+|unique\s+null_filtered\s+`
-	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index|view|model|change\s+stream|sequence))\s+(?P<ObjectName>\w+).*`)
 )
 
 type UpgradeStatus string
@@ -213,35 +210,159 @@ func (c *Client) TruncateAllTables(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, error) {
+	objects := make(map[string]string)
+
+	queries := []string{
+		"SELECT TABLE_NAME as Name, CASE WHEN TABLE_TYPE = 'VIEW' THEN 'view' ELSE 'table' END as Type FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ''",
+		"SELECT INDEX_NAME as Name, 'index' as Type FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = '' AND INDEX_NAME != 'PRIMARY_KEY'",
+	}
+
+	// Some tables might not exist in older emulator versions or different dialects
+	optionalQueries := []string{
+		"SELECT CHANGE_STREAM_NAME as Name, 'change stream' as Type FROM INFORMATION_SCHEMA.CHANGE_STREAMS WHERE CHANGE_STREAM_SCHEMA = ''",
+		"SELECT SEQUENCE_NAME as Name, 'sequence' as Type FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = ''",
+		"SELECT MODEL_NAME as Name, 'model' as Type FROM INFORMATION_SCHEMA.MODELS WHERE MODEL_SCHEMA = ''",
+	}
+
+	for _, q := range append(queries, optionalQueries...) {
+		iter := c.spannerClient.Single().Query(ctx, spanner.Statement{SQL: q})
+		err := iter.Do(func(row *spanner.Row) error {
+			var name, typ string
+			if err := row.Columns(&name, &typ); err != nil {
+				return err
+			}
+			objects[strings.ToLower(name)] = typ
+			return nil
+		})
+		if err != nil {
+			// If it's a "Table not found" error, we just skip it for optional queries
+			if spanner.ErrCode(err) == codes.NotFound || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "Table not found") {
+				continue
+			}
+			// For primary queries, we might want to know if it fails, but for now let's be lenient
+		}
+	}
+
+	return objects, nil
+}
+
 type SchemaDDL struct {
 	Statement  string
 	Filename   string
 	ObjectType string
 }
 
-func parseDDL(statement string) (ddl SchemaDDL, err error) {
-	matches, found := xregexp.FindMatchGroups(ddlParse, statement)
-	if !found {
-		return ddl, errors.New("could not parse DDL statement")
+func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err error) {
+	// Clean the statement for parsing
+	s, err := removeCommentsAndTrim(statement)
+	if err != nil {
+		s = statement
 	}
 
-	objectType := strings.ToLower(matches["ObjectType"])
-	// put all indexes in the same group
-	if strings.HasSuffix(objectType, "index") {
-		objectType = "index"
+	tokens := tokenize(s)
+	if len(tokens) == 0 {
+		return ddl, errors.New("could not parse DDL statement: empty")
 	}
 
-	ddl = SchemaDDL{
+	var objectType, objectName string
+
+	// Simple state machine to find object type and name
+	for i, token := range tokens {
+		upperToken := strings.ToUpper(token)
+		switch upperToken {
+		case "TABLE", "VIEW", "MODEL", "SEQUENCE", "DATABASE":
+			objectType = strings.ToLower(upperToken)
+			j := i + 1
+			// Skip "IF NOT EXISTS"
+			if j < len(tokens) && strings.ToUpper(tokens[j]) == "IF" {
+				if j+2 < len(tokens) && strings.ToUpper(tokens[j+1]) == "NOT" && strings.ToUpper(tokens[j+2]) == "EXISTS" {
+					j += 3
+				}
+			}
+			if j < len(tokens) {
+				objectName = tokens[j]
+			}
+		case "INDEX":
+			objectType = "index"
+			j := i + 1
+			// Skip "IF NOT EXISTS"
+			if j < len(tokens) && strings.ToUpper(tokens[j]) == "IF" {
+				if j+2 < len(tokens) && strings.ToUpper(tokens[j+1]) == "NOT" && strings.ToUpper(tokens[j+2]) == "EXISTS" {
+					j += 3
+				}
+			}
+			if j < len(tokens) {
+				objectName = tokens[j]
+			}
+		case "CHANGE":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "STREAM" {
+				objectType = "change stream"
+				j := i + 2
+				if j < len(tokens) {
+					objectName = tokens[j]
+				}
+			}
+		}
+		if objectName != "" {
+			break
+		}
+	}
+
+	// Clean up object name (remove quotes/backticks)
+	objectName = strings.Trim(objectName, "\"`'")
+
+	// Use metadata to confirm/correct type if available
+	if objects != nil {
+		if t, ok := objects[strings.ToLower(objectName)]; ok {
+			objectType = t
+		}
+	}
+
+	if objectType == "" || objectName == "" {
+		return ddl, errors.New("could not determine the object type or name")
+	}
+
+	return SchemaDDL{
 		Statement:  statement,
 		ObjectType: objectType,
-		Filename:   fmt.Sprintf("%s.sql", strings.ToLower(matches["ObjectName"])),
-	}
+		Filename:   fmt.Sprintf("%s.sql", strings.ToLower(objectName)),
+	}, nil
+}
 
-	if ddl.ObjectType == "" {
-		return ddl, errors.New("could not determine the object type")
-	}
+func tokenize(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	inQuotes := false
+	var quoteChar rune
 
-	return ddl, nil
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if inQuotes {
+			if r == quoteChar {
+				inQuotes = false
+			}
+			current.WriteRune(r)
+		} else {
+			if r == '"' || r == '`' || r == '\'' {
+				inQuotes = true
+				quoteChar = r
+				current.WriteRune(r)
+			} else if strings.ContainsRune(" \t\n\r(),;", r) {
+				if current.Len() > 0 {
+					tokens = append(tokens, current.String())
+					current.Reset()
+				}
+			} else {
+				current.WriteRune(r)
+			}
+		}
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+	return tokens
 }
 
 func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
@@ -255,9 +376,15 @@ func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
 		}
 	}
 
+	objects, err := c.fetchDatabaseObjects(ctx)
+	if err != nil {
+		// Log error but continue with nil objects for best-effort parsing
+		fmt.Fprintf(os.Stderr, "warning: failed to fetch database metadata: %v\n", err)
+	}
+
 	ddls := make([]SchemaDDL, 0)
 	for i := range res.Statements {
-		ddl, err := parseDDL(res.Statements[i])
+		ddl, err := parseDDL(res.Statements[i], objects)
 		if err != nil {
 			return nil, &Error{
 				Code: ErrorCodeLoadSchema,

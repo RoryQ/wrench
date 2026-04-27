@@ -911,10 +911,79 @@ func Test_parseDDL(t *testing.T) {
 				ObjectType: "index",
 			},
 		},
+		{
+			name: "ALTER TABLE",
+			args: args{"ALTER TABLE Singers ADD COLUMN Age INT64"},
+			wantDdl: SchemaDDL{
+				Statement:  "ALTER TABLE Singers ADD COLUMN Age INT64",
+				Filename:   "singers.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE TABLE IF NOT EXISTS",
+			args: args{"CREATE TABLE IF NOT EXISTS Singers (ID INT64) PRIMARY KEY(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE TABLE IF NOT EXISTS Singers (ID INT64) PRIMARY KEY(ID)",
+				Filename:   "singers.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "Metadata lookup for ALTER TABLE",
+			args: args{"ALTER TABLE MyTable ADD COLUMN Foo STRING(MAX)"},
+			// Passing objects map to verify metadata lookup
+			wantDdl: SchemaDDL{
+				Statement:  "ALTER TABLE MyTable ADD COLUMN Foo STRING(MAX)",
+				Filename:   "mytable.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE VIEW IF NOT EXISTS",
+			args: args{"CREATE VIEW IF NOT EXISTS MyView AS SELECT 1"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE VIEW IF NOT EXISTS MyView AS SELECT 1",
+				Filename:   "myview.sql",
+				ObjectType: "view",
+			},
+		},
+		{
+			name: "CREATE INDEX IF NOT EXISTS",
+			args: args{"CREATE INDEX IF NOT EXISTS MyIndex ON MyTable(Col)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE INDEX IF NOT EXISTS MyIndex ON MyTable(Col)",
+				Filename:   "myindex.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE CHANGE STREAM",
+			args: args{"CREATE CHANGE STREAM MyStream FOR ALL"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE CHANGE STREAM MyStream FOR ALL",
+				Filename:   "mystream.sql",
+				ObjectType: "change stream",
+			},
+		},
+		{
+			name: "Empty statement",
+			args: args{""},
+			wantErr: true,
+		},
+		{
+			name: "Unidentifiable statement",
+			args: args{"SELECT 1"},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDdl, err := parseDDL(tt.args.statement)
+			var objects map[string]string
+			if tt.name == "Metadata lookup for ALTER TABLE" {
+				objects = map[string]string{"mytable": "table"}
+			}
+			gotDdl, err := parseDDL(tt.args.statement, objects)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseDDL() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1092,7 +1161,7 @@ func Test_parseDDL1(t *testing.T) {
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			gotDdl, err := parseDDL(tt.statement)
+			gotDdl, err := parseDDL(tt.statement, nil)
 			if !tt.wantErr(t, err, fmt.Sprintf("parseDDL(%v)", tt.statement)) {
 				return
 			}

@@ -48,8 +48,8 @@ func TestLoadMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(ms) != 4 {
-		t.Fatalf("migrations length want 4, but got %v", len(ms))
+	if len(ms) != 6 {
+		t.Fatalf("migrations length want 6, but got %v", len(ms))
 	}
 
 	testcases := []struct {
@@ -81,7 +81,7 @@ func TestLoadMigrations(t *testing.T) {
 }
 
 func TestLoadMigrationsSkipVersion(t *testing.T) {
-	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3, 4}, false, PlaceholderOptions{})
+	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), []uint{2, 3, 4, 5, 6}, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +90,8 @@ func TestLoadMigrationsSkipVersion(t *testing.T) {
 		t.Fatalf("migrations length want 1, but got %v", len(ms))
 	}
 
-	if ms[0].Version != 5 {
-		t.Errorf("version want %v, but got %v", 5, ms[0].Version)
+	if ms[0].Version != 7 {
+		t.Errorf("version want %v, but got %v", 7, ms[0].Version)
 	}
 }
 
@@ -191,6 +191,55 @@ func TestReplacePlaceholders(t *testing.T) {
 	}
 }
 
+func Test_toStatements(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		want []string
+	}{
+		{
+			name: "simple statements",
+			file: "SELECT 1; SELECT 2;",
+			want: []string{"SELECT 1", "SELECT 2"},
+		},
+		{
+			name: "semicolon in string literal",
+			file: "INSERT INTO Singers (FirstName) VALUES ('John; Doe'); SELECT 1;",
+			want: []string{"INSERT INTO Singers (FirstName) VALUES ('John; Doe')", "SELECT 1"},
+		},
+		{
+			name: "semicolon in comment",
+			file: "SELECT 1; -- comment with ; \n SELECT 2;",
+			want: []string{"SELECT 1", "SELECT 2"},
+		},
+		{
+			name: "semicolon in triple-quoted string",
+			file: "SELECT '''a;b'''; SELECT \"\"\"c;d\"\"\";",
+			want: []string{"SELECT '''a;b'''", "SELECT \"\"\"c;d\"\"\""},
+		},
+		{
+			name: "mixed comments and literals",
+			file: `
+-- first statement
+INSERT INTO T1 (C1) VALUES (';'); /* multi-line
+comment with ; */
+SELECT * FROM T1; # another comment ;
+`,
+			want: []string{"INSERT INTO T1 (C1) VALUES (';')", "SELECT * FROM T1"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := toStatements([]byte(tt.file))
+			if err != nil {
+				t.Errorf("toStatements() error = %v", err)
+				return
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func Test_getStatementKind(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -215,6 +264,11 @@ func Test_getStatementKind(t *testing.T) {
 		{
 			"lowercase insert statement is DML",
 			TestStmtDML,
+			StatementKindDML,
+		},
+		{
+			"REPLACE statement is DML",
+			"REPLACE INTO Singers(FirstName) VALUES(\"Bar\")",
 			StatementKindDML,
 		},
 	}

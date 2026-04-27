@@ -39,14 +39,37 @@ func Test_schema(t *testing.T) {
 	assert.NoError(t, err)
 	// replacements have been applied
 	assert.Contains(t, string(contentAIModelOutput), `endpoint = '//aiplatform.googleapis.com/projects/test-project/locations/us-central1/publishers/google/models/my-instance-database-model'`)
+
+	assert.DirExists(t, "testdata/schema_test/change stream")
+	assert.FileExists(t, "testdata/schema_test/change stream/alltables.sql")
+
+	contentChangeStream, err := os.ReadFile("testdata/schema_test/change stream/alltables.sql")
+	assert.NoError(t, err)
+	assert.Contains(t, string(contentChangeStream), "CREATE CHANGE STREAM AllTables")
+
+	assert.FileExists(t, "testdata/schema_test/table/advancedsyntax.sql")
+	contentAdvancedTable, err := os.ReadFile("testdata/schema_test/table/advancedsyntax.sql")
+	assert.NoError(t, err)
+	assert.Contains(t, string(contentAdvancedTable), "JSON")
+	assert.Contains(t, string(contentAdvancedTable), "CHECK(Id > 0)")
+
+	assert.DirExists(t, "testdata/schema_test/sequence")
+	assert.FileExists(t, "testdata/schema_test/sequence/mysequence.sql")
+	contentSequence, err := os.ReadFile("testdata/schema_test/sequence/mysequence.sql")
+	assert.NoError(t, err)
+	assert.Contains(t, string(contentSequence), "CREATE SEQUENCE MySequence")
 }
 
 func cleanup(t *testing.T) {
 	os.RemoveAll("testdata/schema_test/table")
 	os.RemoveAll("testdata/schema_test/schema.sql")
 	os.RemoveAll("testdata/schema_test/model")
+	os.RemoveAll("testdata/schema_test/change stream")
+	os.RemoveAll("testdata/schema_test/sequence")
 	require.NoDirExists(t, "testdata/schema_test/table")
 	require.NoFileExists(t, "testdata/schema_test/schema.sql")
 	require.NoDirExists(t, "testdata/schema_test/model")
+	require.NoDirExists(t, "testdata/schema_test/change stream")
+	require.NoDirExists(t, "testdata/schema_test/sequence")
 	require.NoFileExists(t, "testdata/schema_test/custom_ai_model.sql")
 }

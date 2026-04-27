@@ -65,7 +65,7 @@ const (
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
 	indexOptions              = `unique\s+|null_filtered\s+|unique\s+null_filtered\s+`
-	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index|view|model))\s+(?P<ObjectName>\w+).*`)
+	ddlParse                  = regexp.MustCompile(`(?i)create\s+(?P<ObjectType>(table|(` + indexOptions + `)?index|view|model|change\s+stream|sequence))\s+(?P<ObjectName>\w+).*`)
 )
 
 type UpgradeStatus string

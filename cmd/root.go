@@ -52,6 +52,7 @@ var (
 	verbose                   bool
 	detectPartitionedDML      bool
 	partitionedDMLConcurrency uint16
+	ffMigrations              bool
 )
 
 var rootCmd = &cobra.Command{

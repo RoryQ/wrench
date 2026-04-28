@@ -101,10 +101,7 @@ func init() {
 	migrateUpCmd.Flags().SetNormalizeFunc(underscoreToDashes)
 
 	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
-	migrateUpCmd.Flags().UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")
-	migrateUpCmd.Flags().Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement for ${PROJECT_ID}, ${INSTANCE_ID} and ${DATABASE_ID}")
-	migrateUpCmd.Flags().String(flagProtoDescriptorFile, "", "Proto descriptor file to be used with migrations")
-	migrateUpCmd.Flags().Bool(flagFFMigrations, false, "Fast-forward migrations by batching contiguous DDL migrations into a request. Intended for dev environments.")
+	addMigrateUpFlags(migrateUpCmd.Flags())
 }
 
 func migrateCreate(c *cobra.Command, args []string) error {
@@ -193,14 +190,6 @@ func migrateUp(c *cobra.Command, args []string) error {
 				err: err,
 				cmd: c,
 			}
-		}
-	}
-
-	ffMigrations, err := c.Flags().GetBool(flagFFMigrations)
-	if err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
 		}
 	}
 

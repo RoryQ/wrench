@@ -27,17 +27,7 @@ func init() {
 	// schema flags
 	schemaCmd.Flags().String(flagSpannerEmulatorImage, "roryq/spanner-emulator:latest", "Spanner emulator image to use. Override this to pin version or change registry.")
 
-	// copy migrate up flags
-	schemaCmd.Flags().AddFlagSet(findCommand("up").LocalFlags())
-}
-
-func findCommand(name string) *cobra.Command {
-	for _, command := range migrateCmd.Commands() {
-		if command.Name() == name {
-			return command
-		}
-	}
-	return nil
+	addMigrateUpFlags(schemaCmd.Flags())
 }
 
 func schema(c *cobra.Command, args []string) error {

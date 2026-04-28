@@ -23,6 +23,7 @@ import (
 	"context"
 	"path/filepath"
 
+	"github.com/spf13/pflag"
 	"github.com/spf13/cobra"
 
 	"github.com/roryq/wrench/pkg/spanner"
@@ -113,4 +114,11 @@ func protoDescriptorFilePath(c *cobra.Command) string {
 	}
 
 	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
+}
+
+func addMigrateUpFlags(f *pflag.FlagSet) {
+	f.UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")
+	f.Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement for ${PROJECT_ID}, ${INSTANCE_ID} and ${DATABASE_ID}")
+	f.String(flagProtoDescriptorFile, "", "Proto descriptor file to be used with migrations")
+	f.BoolVar(&ffMigrations, flagFFMigrations, false, "Fast-forward migrations by batching contiguous DDL migrations into a request. Intended for dev environments.")
 }

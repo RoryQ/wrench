@@ -1269,6 +1269,30 @@ func countOccurrences(s []string, v string) int {
 	return c
 }
 
+func Test_tokenize(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want []string
+	}{
+		{
+			name: "simple",
+			s:    "CREATE TABLE Singers ( SingerId INT64 ) PRIMARY KEY ( SingerId )",
+			want: []string{"CREATE", "TABLE", "Singers", "SingerId", "INT64", "PRIMARY", "KEY", "SingerId"},
+		},
+		{
+			name: "escaped single quote",
+			s:    "CREATE TABLE 'H''S' ( SingerId INT64 )",
+			want: []string{"CREATE", "TABLE", "'H''S'", "SingerId", "INT64"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, tokenize(tt.s), "tokenize(%v)", tt.s)
+		})
+	}
+}
+
 func newFile(t *testing.T, dir, fileName string, content []byte) {
 	file, err := os.Create(filepath.Join(dir, fileName))
 	require.NoError(t, err)

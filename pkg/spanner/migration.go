@@ -251,6 +251,11 @@ func toStatements(file []byte) ([]string, error) {
 						currentStmt.WriteRune(c)
 						index += 2
 					}
+				} else if startQuote == singleQuote && len(runes) > index+1 && runes[index+1] == singleQuote {
+					// escaped single quote ''
+					currentStmt.WriteRune(c)
+					c = runes[index+1]
+					index++
 				} else {
 					isInQuoted = false
 					startQuote = 0
@@ -465,6 +470,11 @@ func removeCommentsAndTrim(sql string) (string, error) {
 						res.WriteRune(c)
 						index += 2
 					}
+				} else if startQuote == singleQuote && len(runes) > index+1 && runes[index+1] == singleQuote {
+					// escaped single quote ''
+					res.WriteRune(c)
+					c = runes[index+1]
+					index++
 				} else {
 					isInQuoted = false
 					startQuote = 0

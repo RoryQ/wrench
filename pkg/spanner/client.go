@@ -393,7 +393,14 @@ func tokenize(s string) []string {
 		r := runes[i]
 		if inQuotes {
 			if r == quoteChar {
-				inQuotes = false
+				if quoteChar == '\'' && i+1 < len(runes) && runes[i+1] == '\'' {
+					// escaped single quote
+					current.WriteRune(r)
+					r = runes[i+1]
+					i++
+				} else {
+					inQuotes = false
+				}
 			}
 			current.WriteRune(r)
 		} else {

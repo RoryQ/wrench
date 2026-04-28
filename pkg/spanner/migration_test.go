@@ -227,6 +227,11 @@ SELECT * FROM T1; # another comment ;
 `,
 			want: []string{"INSERT INTO T1 (C1) VALUES (';')", "SELECT * FROM T1"},
 		},
+		{
+			name: "escaped single quote in literal followed by semicolon",
+			file: "INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER ; PLUS LOAN'); SELECT 1;",
+			want: []string{"INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER ; PLUS LOAN')", "SELECT 1"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -763,6 +768,10 @@ SELECT 1`,
 			input: `/** This is a javadoc style comment /** this is still a comment **/
 SELECT 1`,
 			want: `SELECT 1`,
+		},
+		{
+			input: `INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER PLUS LOAN');`,
+			want:  `INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER PLUS LOAN')`,
 		},
 	}
 	for _, tc := range tests {

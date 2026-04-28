@@ -74,7 +74,15 @@ func load(c *cobra.Command, args []string) error {
 		}
 	}
 
-	err = os.WriteFile(schemaFilePath(c), ddl, 0664)
+	path := schemaFilePath(c)
+	if err := mkdir(filepath.Dir(path)); err != nil {
+		return &Error{
+			err: err,
+			cmd: c,
+		}
+	}
+
+	err = os.WriteFile(path, ddl, 0664)
 	if err != nil {
 		return &Error{
 			err: err,
@@ -237,7 +245,7 @@ func writeData(data spanner.StaticData, schemaDir string) error {
 }
 
 func schemaDirPath(c *cobra.Command) string {
-	return c.Flag(flagNameDirectory).Value.String()
+	return outputDirPath(c)
 }
 
 func clearSchemaDir(c *cobra.Command) error {

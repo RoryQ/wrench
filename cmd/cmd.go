@@ -33,6 +33,7 @@ const (
 	flagNameInstance              = "instance"
 	flagNameDatabase              = "database"
 	flagNameDirectory             = "directory"
+	flagNameOutputDir             = "output-dir"
 	flagSkipVersions              = "skip-versions"
 	flagNameCreateNoPrompt        = "no-prompt"
 	flagCredentialsFile           = "credentials-file"
@@ -80,7 +81,7 @@ func schemaFilePath(c *cobra.Command) string {
 	if filename == "" {
 		filename = defaultSchemaFileName
 	}
-	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
+	return filepath.Join(outputDirPath(c), filename)
 }
 
 func staticDataTablesFilePath(c *cobra.Command) string {
@@ -88,7 +89,15 @@ func staticDataTablesFilePath(c *cobra.Command) string {
 	if filename == "" {
 		filename = defaultStaticDataTablesFile
 	}
-	return filepath.Join(c.Flag(flagNameDirectory).Value.String(), filename)
+	return filepath.Join(outputDirPath(c), filename)
+}
+
+func outputDirPath(c *cobra.Command) string {
+	outDir := c.Flag(flagNameOutputDir).Value.String()
+	if outDir != "" {
+		return outDir
+	}
+	return c.Flag(flagNameDirectory).Value.String()
 }
 
 func protoDescriptorFilePath(c *cobra.Command) string {

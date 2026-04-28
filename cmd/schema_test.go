@@ -66,10 +66,37 @@ func cleanup(t *testing.T) {
 	os.RemoveAll("testdata/schema_test/model")
 	os.RemoveAll("testdata/schema_test/change_stream")
 	os.RemoveAll("testdata/schema_test/sequence")
+	os.RemoveAll("testdata/output_test")
 	require.NoDirExists(t, "testdata/schema_test/table")
 	require.NoFileExists(t, "testdata/schema_test/schema.sql")
 	require.NoDirExists(t, "testdata/schema_test/model")
 	require.NoDirExists(t, "testdata/schema_test/change_stream")
 	require.NoDirExists(t, "testdata/schema_test/sequence")
+	require.NoDirExists(t, "testdata/output_test")
 	require.NoFileExists(t, "testdata/schema_test/custom_ai_model.sql")
+}
+
+func Test_schemaWithOutputDir(t *testing.T) {
+	// clean before and after
+	t.Cleanup(func() { cleanup(t) })
+	cleanup(t)
+
+	// execute schema command with output-dir
+	cmd := schemaCmd
+	_ = cmd.Flag(flagNameDirectory).Value.Set("testdata/schema_test")
+	_ = cmd.Flag(flagNameOutputDir).Value.Set("testdata/output_test")
+	_ = cmd.Flag(flagNameProject).Value.Set("test-project")
+	_ = cmd.Flag(flagNameInstance).Value.Set("my-instance")
+	err := schema(cmd, []string{})
+	assert.NoError(t, err)
+
+	// Check that nothing was written to the source directory
+	assert.NoDirExists(t, "testdata/schema_test/table")
+	assert.NoFileExists(t, "testdata/schema_test/schema.sql")
+
+	// Check that everything was written to the output directory
+	assert.DirExists(t, "testdata/output_test/table")
+	assert.FileExists(t, "testdata/output_test/schema.sql")
+	assert.DirExists(t, "testdata/output_test/change_stream")
+	assert.FileExists(t, "testdata/output_test/change_stream/alltables.sql")
 }

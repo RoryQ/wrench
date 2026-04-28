@@ -36,10 +36,6 @@ import (
 	"github.com/roryq/wrench/pkg/xregexp"
 )
 
-const (
-	statementsSeparator = ";"
-)
-
 var (
 	// migrationFileRegex matches the following patterns
 	// 001.sql

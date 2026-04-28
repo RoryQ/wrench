@@ -25,7 +25,7 @@ GOLANGCI_LINT_VERSION ?= 2.11.3
 .PHONY: tooldep.golangci-lint
 tooldep.golangci-lint:
 	-@[[ "$(shell golangci-lint version)" =~ "$(GOLANGCI_LINT_VERSION)" ]] || \
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION)
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GOLANGCI_LINT_VERSION)
 
 .PHONY: _spanner-up
 _spanner-up:

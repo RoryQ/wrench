@@ -35,9 +35,9 @@ import (
 )
 
 const (
-	dirTable      = "table"
+	dirTable      = spanner.ObjectTypeTable
 	dirStaticData = "static_data"
-	dirIndex      = "index"
+	dirIndex      = spanner.ObjectTypeIndex
 )
 
 type staticDataConfig struct {
@@ -82,7 +82,7 @@ func load(c *cobra.Command, args []string) error {
 		}
 	}
 
-	err = os.WriteFile(path, ddl, 0664)
+	err = os.WriteFile(path, ddl, 0644)
 	if err != nil {
 		return &Error{
 			err: err,
@@ -219,13 +219,13 @@ func writeDDL(ddl spanner.SchemaDDL, schemaDir string) error {
 	if err := mkdir(parent); err != nil {
 		return err
 	}
-	return os.WriteFile(file, []byte(ddl.Statement), 0664)
+	return os.WriteFile(file, []byte(ddl.Statement), 0644)
 }
 
 func mkdir(parent string) error {
 	_, err := os.Stat(parent)
 	if os.IsNotExist(err) {
-		err = os.MkdirAll(parent, 0700)
+		err = os.MkdirAll(parent, 0755)
 		if err != nil {
 			return err
 		}
@@ -249,18 +249,13 @@ func schemaDirPath(c *cobra.Command) string {
 }
 
 func clearSchemaDir(c *cobra.Command) error {
-	tables := filepath.Join(schemaDirPath(c), dirTable)
-	indexes := filepath.Join(schemaDirPath(c), dirIndex)
-	staticData := filepath.Join(schemaDirPath(c), dirStaticData)
+	knownObjectTypes := append([]string{dirStaticData}, spanner.AllObjectTypes...)
 
-	if err := os.RemoveAll(tables); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(indexes); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(staticData); err != nil {
-		return err
+	for _, target := range knownObjectTypes {
+		path := filepath.Join(schemaDirPath(c), target)
+		if err := os.RemoveAll(path); err != nil {
+			return err
+		}
 	}
 
 	return nil

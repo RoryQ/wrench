@@ -59,7 +59,29 @@ const (
 	ExistingMigrationsUpgradeStarted   = UpgradeStatus("Started")
 	ExistingMigrationsUpgradeCompleted = UpgradeStatus("Completed")
 	createUpgradeIndicatorFormatString = `CREATE TABLE %s (Dummy INT64 NOT NULL) PRIMARY KEY(Dummy)`
+
+	ObjectTypeTable         = "table"
+	ObjectTypeView          = "view"
+	ObjectTypeIndex         = "index"
+	ObjectTypeModel         = "model"
+	ObjectTypeChangeStream  = "change_stream"
+	ObjectTypeSequence      = "sequence"
+	ObjectTypeDatabaseRole  = "database_role"
+	ObjectTypeSearchIndex   = "search_index"
+	ObjectTypePropertyGraph = "property_graph"
 )
+
+var AllObjectTypes = []string{
+	ObjectTypeTable,
+	ObjectTypeView,
+	ObjectTypeIndex,
+	ObjectTypeModel,
+	ObjectTypeChangeStream,
+	ObjectTypeSequence,
+	ObjectTypeDatabaseRole,
+	ObjectTypeSearchIndex,
+	ObjectTypePropertyGraph,
+}
 
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
@@ -284,7 +306,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 				objectName = tokens[j]
 			}
 		case "INDEX":
-			objectType = "index"
+			objectType = ObjectTypeIndex
 			j := i + 1
 			// Skip "IF NOT EXISTS"
 			if j < len(tokens) && strings.ToUpper(tokens[j]) == "IF" {
@@ -297,7 +319,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 			}
 		case "DATABASE":
 			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "ROLE" {
-				objectType = "database_role"
+				objectType = ObjectTypeDatabaseRole
 				if i+2 < len(tokens) {
 					objectName = tokens[i+2]
 				}
@@ -309,7 +331,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 			}
 		case "CHANGE":
 			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "STREAM" {
-				objectType = "change_stream"
+				objectType = ObjectTypeChangeStream
 				j := i + 2
 				if j < len(tokens) {
 					objectName = tokens[j]
@@ -317,7 +339,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 			}
 		case "SEARCH":
 			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "INDEX" {
-				objectType = "search_index"
+				objectType = ObjectTypeSearchIndex
 				j := i + 2
 				if j < len(tokens) {
 					objectName = tokens[j]
@@ -325,7 +347,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 			}
 		case "PROPERTY":
 			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "GRAPH" {
-				objectType = "property_graph"
+				objectType = ObjectTypePropertyGraph
 				j := i + 2
 				if j < len(tokens) {
 					objectName = tokens[j]

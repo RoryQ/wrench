@@ -20,32 +20,69 @@
 package spanner
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"google.golang.org/grpc/codes"
+	"os"
 	"sort"
+	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/googleapis/gax-go/v2"
+	"github.com/sourcegraph/conc/pool"
+
+	"github.com/roryq/wrench/pkg/spannerz"
+
+	"google.golang.org/grpc/codes"
 
 	"cloud.google.com/go/spanner"
 	admin "cloud.google.com/go/spanner/admin/database/apiv1"
+	databasepb "cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
+	vkit "cloud.google.com/go/spanner/apiv1"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
-	databasepb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
+
+	"github.com/roryq/wrench/pkg/spanner/dataloader"
 )
 
 const (
 	ddlStatementsSeparator             = ";"
 	upgradeIndicator                   = "wrench_upgrade_indicator"
 	historyStr                         = "History"
+	lockStr                            = "Lock"
 	FirstRun                           = UpgradeStatus("FirstRun")
 	ExistingMigrationsNoUpgrade        = UpgradeStatus("NoUpgrade")
 	ExistingMigrationsUpgradeStarted   = UpgradeStatus("Started")
 	ExistingMigrationsUpgradeCompleted = UpgradeStatus("Completed")
 	createUpgradeIndicatorFormatString = `CREATE TABLE %s (Dummy INT64 NOT NULL) PRIMARY KEY(Dummy)`
+
+	ObjectTypeTable         = "table"
+	ObjectTypeView          = "view"
+	ObjectTypeIndex         = "index"
+	ObjectTypeModel         = "model"
+	ObjectTypeChangeStream  = "change_stream"
+	ObjectTypeSequence      = "sequence"
+	ObjectTypeDatabaseRole  = "database_role"
+	ObjectTypeSearchIndex   = "search_index"
+	ObjectTypePropertyGraph = "property_graph"
 )
+
+var AllObjectTypes = []string{
+	ObjectTypeTable,
+	ObjectTypeView,
+	ObjectTypeIndex,
+	ObjectTypeModel,
+	ObjectTypeChangeStream,
+	ObjectTypeSequence,
+	ObjectTypeDatabaseRole,
+	ObjectTypeSearchIndex,
+	ObjectTypePropertyGraph,
+}
+
 var (
-	createUpgradeIndicatorSql          = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
+	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
 )
 
 type UpgradeStatus string
@@ -73,7 +110,15 @@ func NewClient(ctx context.Context, config *Config) (*Client, error) {
 		opts = append(opts, option.WithCredentialsFile(config.CredentialsFile))
 	}
 
-	spannerClient, err := spanner.NewClient(ctx, config.URL(), opts...)
+	callOptions := &vkit.CallOptions{}
+	if config.StmtTimeout > 0 {
+		callOptions.ExecuteSql = []gax.CallOption{gax.WithTimeout(config.StmtTimeout)}
+	}
+	spannerClient, err := spanner.NewClientWithConfig(ctx, config.URL(), spanner.ClientConfig{
+		SessionPoolConfig:    spanner.DefaultSessionPoolConfig,
+		DisableRouteToLeader: false,
+		CallOptions:          callOptions,
+	}, opts...)
 	if err != nil {
 		return nil, &Error{
 			Code: ErrorCodeCreateClient,
@@ -97,13 +142,20 @@ func NewClient(ctx context.Context, config *Config) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) CreateDatabase(ctx context.Context, ddl []byte) error {
-	statements := toStatements(ddl)
+func (c *Client) CreateDatabase(ctx context.Context, ddl []byte, protoDescriptors []byte) error {
+	statements, err := toStatements(ddl)
+	if err != nil {
+		return &Error{
+			Code: ErrorCodeCreateDatabase,
+			err:  err,
+		}
+	}
 
 	createReq := &databasepb.CreateDatabaseRequest{
-		Parent:          fmt.Sprintf("projects/%s/instances/%s", c.config.Project, c.config.Instance),
-		CreateStatement: fmt.Sprintf("CREATE DATABASE `%s`", c.config.Database),
-		ExtraStatements: statements,
+		Parent:           fmt.Sprintf("projects/%s/instances/%s", c.config.Project, c.config.Instance),
+		CreateStatement:  fmt.Sprintf("CREATE DATABASE `%s`", c.config.Database),
+		ExtraStatements:  statements,
+		ProtoDescriptors: protoDescriptors,
 	}
 
 	op, err := c.spannerAdminClient.CreateDatabase(ctx, createReq)
@@ -144,6 +196,7 @@ func (c *Client) TruncateAllTables(ctx context.Context) error {
 	ri := c.spannerClient.Single().Query(ctx, spanner.Statement{
 		SQL: "SELECT table_name FROM information_schema.tables WHERE table_catalog = '' AND table_schema = ''",
 	})
+	defer ri.Stop()
 	err := ri.Do(func(row *spanner.Row) error {
 		t := &table{}
 		if err := row.ToStruct(t); err != nil {
@@ -177,6 +230,230 @@ func (c *Client) TruncateAllTables(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, error) {
+	objects := make(map[string]string)
+
+	queries := []string{
+		"SELECT TABLE_NAME as Name, CASE WHEN TABLE_TYPE = 'VIEW' THEN 'view' ELSE 'table' END as Type FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ''",
+		"SELECT INDEX_NAME as Name, 'index' as Type FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = '' AND INDEX_NAME != 'PRIMARY_KEY'",
+	}
+
+	// Some tables might not exist in older emulator versions or different dialects
+	optionalQueries := []string{
+		"SELECT CHANGE_STREAM_NAME as Name, 'change_stream' as Type FROM INFORMATION_SCHEMA.CHANGE_STREAMS WHERE CHANGE_STREAM_SCHEMA = ''",
+		"SELECT SEQUENCE_NAME as Name, 'sequence' as Type FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = ''",
+		"SELECT MODEL_NAME as Name, 'model' as Type FROM INFORMATION_SCHEMA.MODELS WHERE MODEL_SCHEMA = ''",
+	}
+
+	for _, q := range append(queries, optionalQueries...) {
+		iter := c.spannerClient.Single().Query(ctx, spanner.Statement{SQL: q})
+		err := iter.Do(func(row *spanner.Row) error {
+			var name, typ string
+			if err := row.Columns(&name, &typ); err != nil {
+				return err
+			}
+			objects[strings.ToLower(name)] = typ
+			return nil
+		})
+		if err != nil {
+			// If it's a "Table not found" error, we just skip it for optional queries
+			if spanner.ErrCode(err) == codes.NotFound || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "Table not found") {
+				continue
+			}
+			// For primary queries, we might want to know if it fails, but for now let's be lenient
+		}
+	}
+
+	return objects, nil
+}
+
+type SchemaDDL struct {
+	Statement  string
+	Filename   string
+	ObjectType string
+}
+
+func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err error) {
+	// Clean the statement for parsing
+	s, err := removeCommentsAndTrim(statement)
+	if err != nil {
+		s = statement
+	}
+
+	tokens := tokenize(s)
+	if len(tokens) == 0 {
+		return ddl, errors.New("could not parse DDL statement: empty")
+	}
+
+	var objectType, objectName string
+
+	// Simple state machine to find object type and name
+	for i, token := range tokens {
+		upperToken := strings.ToUpper(token)
+		switch upperToken {
+		case "TABLE", "VIEW", "MODEL", "SEQUENCE":
+			objectType = strings.ToLower(upperToken)
+			j := i + 1
+			// Skip "IF NOT EXISTS"
+			if j < len(tokens) && strings.ToUpper(tokens[j]) == "IF" {
+				if j+2 < len(tokens) && strings.ToUpper(tokens[j+1]) == "NOT" && strings.ToUpper(tokens[j+2]) == "EXISTS" {
+					j += 3
+				}
+			}
+			if j < len(tokens) {
+				objectName = tokens[j]
+			}
+		case "INDEX":
+			objectType = ObjectTypeIndex
+			j := i + 1
+			// Skip "IF NOT EXISTS"
+			if j < len(tokens) && strings.ToUpper(tokens[j]) == "IF" {
+				if j+2 < len(tokens) && strings.ToUpper(tokens[j+1]) == "NOT" && strings.ToUpper(tokens[j+2]) == "EXISTS" {
+					j += 3
+				}
+			}
+			if j < len(tokens) {
+				objectName = tokens[j]
+			}
+		case "DATABASE":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "ROLE" {
+				objectType = ObjectTypeDatabaseRole
+				if i+2 < len(tokens) {
+					objectName = tokens[i+2]
+				}
+			} else {
+				objectType = "database"
+				if i+1 < len(tokens) {
+					objectName = tokens[i+1]
+				}
+			}
+		case "CHANGE":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "STREAM" {
+				objectType = ObjectTypeChangeStream
+				j := i + 2
+				if j < len(tokens) {
+					objectName = tokens[j]
+				}
+			}
+		case "SEARCH":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "INDEX" {
+				objectType = ObjectTypeSearchIndex
+				j := i + 2
+				if j < len(tokens) {
+					objectName = tokens[j]
+				}
+			}
+		case "PROPERTY":
+			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "GRAPH" {
+				objectType = ObjectTypePropertyGraph
+				j := i + 2
+				if j < len(tokens) {
+					objectName = tokens[j]
+				}
+			}
+		}
+		if objectName != "" {
+			break
+		}
+	}
+
+	// Clean up object name (remove quotes/backticks)
+	objectName = strings.Trim(objectName, "\"`'")
+
+	// Use metadata to confirm/correct type if available
+	if objects != nil {
+		if t, ok := objects[strings.ToLower(objectName)]; ok {
+			objectType = t
+		}
+	}
+
+	objectType = strings.ReplaceAll(objectType, " ", "_")
+
+	if objectType == "" || objectName == "" {
+		return ddl, errors.New("could not determine the object type or name")
+	}
+
+	return SchemaDDL{
+		Statement:  statement,
+		ObjectType: objectType,
+		Filename:   fmt.Sprintf("%s.sql", strings.ToLower(objectName)),
+	}, nil
+}
+
+func tokenize(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	inQuotes := false
+	var quoteChar rune
+
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if inQuotes {
+			if r == quoteChar {
+				if (quoteChar == '\'' || quoteChar == '"') && i+1 < len(runes) && runes[i+1] == quoteChar {
+					// escaped single or double quote
+					current.WriteRune(r)
+					r = runes[i+1]
+					i++
+				} else {
+					inQuotes = false
+				}
+			}
+			current.WriteRune(r)
+		} else {
+			if r == '"' || r == '`' || r == '\'' {
+				inQuotes = true
+				quoteChar = r
+				current.WriteRune(r)
+			} else if strings.ContainsRune(" \t\n\r(),;", r) {
+				if current.Len() > 0 {
+					tokens = append(tokens, current.String())
+					current.Reset()
+				}
+			} else {
+				current.WriteRune(r)
+			}
+		}
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+	return tokens
+}
+
+func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
+	req := &databasepb.GetDatabaseDdlRequest{Database: c.config.URL()}
+
+	res, err := c.spannerAdminClient.GetDatabaseDdl(ctx, req)
+	if err != nil {
+		return nil, &Error{
+			Code: ErrorCodeLoadSchema,
+			err:  err,
+		}
+	}
+
+	objects, err := c.fetchDatabaseObjects(ctx)
+	if err != nil {
+		// Log error but continue with nil objects for best-effort parsing
+		fmt.Fprintf(os.Stderr, "warning: failed to fetch database metadata: %v\n", err)
+	}
+
+	ddls := make([]SchemaDDL, 0)
+	for i := range res.Statements {
+		ddl, err := parseDDL(res.Statements[i], objects)
+		if err != nil {
+			return nil, &Error{
+				Code: ErrorCodeLoadSchema,
+				err:  err,
+			}
+		}
+		ddls = append(ddls, ddl)
+	}
+
+	return ddls, nil
+}
+
 func (c *Client) LoadDDL(ctx context.Context) ([]byte, error) {
 	req := &databasepb.GetDatabaseDdlRequest{Database: c.config.URL()}
 
@@ -203,14 +480,115 @@ func (c *Client) LoadDDL(ctx context.Context) ([]byte, error) {
 	return schema, nil
 }
 
-func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte) error {
-	return c.ApplyDDL(ctx, toStatements(ddl))
+type StaticData struct {
+	TableName  string
+	Statements []string
+	Count      int
 }
 
-func (c *Client) ApplyDDL(ctx context.Context, statements []string) error {
+func (s StaticData) ToFileName() string {
+	return strings.ToLower(s.TableName) + ".sql"
+}
+
+func (c *Client) LoadStaticDatas(ctx context.Context, tables []string, customSort map[string]string) ([]StaticData, error) {
+	datas := make([]StaticData, 0, len(tables))
+	for _, t := range tables {
+		d, err := c.loadStaticData(ctx, t, customSort[t])
+		if err != nil {
+			return nil, err
+		}
+		datas = append(datas, d)
+	}
+
+	return datas, nil
+}
+
+func (c *Client) loadStaticData(ctx context.Context, table string, customSort string) (StaticData, error) {
+	data := StaticData{
+		TableName: table,
+	}
+	query, err := c.staticDataQuery(ctx, table, customSort)
+	if err != nil {
+		return StaticData{}, err
+	}
+
+	err = c.spannerClient.
+		Single().
+		Query(ctx, query).
+		Do(func(r *spanner.Row) error {
+			insert, err := dataloader.RowToInsertStatement(table, r)
+			if err != nil {
+				return err
+			}
+			data.Statements = append(data.Statements, insert)
+			data.Count++
+			return nil
+		})
+	if err != nil {
+		return StaticData{}, err
+	}
+
+	return data, nil
+}
+
+func (c *Client) staticDataQuery(ctx context.Context, table, customOrderBy string) (spanner.Statement, error) {
+	var orderByClause string
+
+	// use primary key sort by default
+	if customOrderBy == "" {
+		var columnOrders []string
+		stmt := spanner.NewStatement(
+			"SELECT COLUMN_NAME, COLUMN_ORDERING FROM INFORMATION_SCHEMA.INDEX_COLUMNS " +
+				"WHERE INDEX_NAME='PRIMARY_KEY' AND TABLE_NAME=@tableName " +
+				"ORDER BY ORDINAL_POSITION")
+		stmt.Params["tableName"] = table
+		err := c.spannerClient.
+			Single().
+			Query(ctx, stmt).
+			Do(func(r *spanner.Row) error {
+				var name, order string
+				if err := r.Columns(&name, &order); err != nil {
+					return err
+				}
+
+				columnOrders = append(columnOrders, fmt.Sprintf("%s %s", name, order))
+
+				return nil
+			})
+		if err != nil {
+			return spanner.Statement{}, err
+		}
+
+		if len(columnOrders) > 0 {
+			orderByClause = "\nORDER BY " + strings.Join(columnOrders, ", ")
+		}
+	} else {
+		orderByClause = "\nORDER BY " + customOrderBy
+	}
+
+	return spanner.NewStatement("SELECT * FROM " + table + orderByClause), nil
+}
+
+func (c *Client) ApplyDDLFile(ctx context.Context, ddl []byte, placeholderOptions PlaceholderOptions, protoDescriptors []byte) error {
+	statements, err := toStatements(ddl)
+	if err != nil {
+		return err
+	}
+
+	if placeholderOptions.ReplacementEnabled {
+		statements, err = replacePlaceholders(statements, placeholderOptions.Placeholders)
+		if err != nil {
+			return err
+		}
+	}
+	return c.ApplyDDL(ctx, statements, protoDescriptors)
+}
+
+func (c *Client) ApplyDDL(ctx context.Context, statements []string, protoDescriptors []byte) error {
 	req := &databasepb.UpdateDatabaseDdlRequest{
-		Database:   c.config.URL(),
-		Statements: statements,
+		Database:         c.config.URL(),
+		Statements:       statements,
+		ProtoDescriptors: protoDescriptors,
 	}
 
 	op, err := c.spannerAdminClient.UpdateDatabaseDdl(ctx, req)
@@ -232,11 +610,21 @@ func (c *Client) ApplyDDL(ctx context.Context, statements []string) error {
 	return nil
 }
 
-func (c *Client) ApplyDMLFile(ctx context.Context, ddl []byte, partitioned bool) (int64, error) {
-	statements := toStatements(ddl)
+func (c *Client) ApplyDMLFile(ctx context.Context, dml []byte, partitioned bool, concurrency int, placeholderOptions PlaceholderOptions) (int64, error) {
+	statements, err := toStatements(dml)
+	if err != nil {
+		return 0, err
+	}
+
+	if placeholderOptions.ReplacementEnabled {
+		statements, err = replacePlaceholders(statements, placeholderOptions.Placeholders)
+		if err != nil {
+			return 0, err
+		}
+	}
 
 	if partitioned {
-		return c.ApplyPartitionedDML(ctx, statements)
+		return c.ApplyPartitionedDML(ctx, statements, concurrency)
 	}
 	return c.ApplyDML(ctx, statements)
 }
@@ -265,37 +653,47 @@ func (c *Client) ApplyDML(ctx context.Context, statements []string) (int64, erro
 	return numAffectedRows, nil
 }
 
-func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string) (int64, error) {
-	numAffectedRows := int64(0)
+func (c *Client) ApplyPartitionedDML(ctx context.Context, statements []string, concurrency int) (int64, error) {
+	numAffectedRows := atomic.Int64{}
 
+	concurrency = cmp.Or(concurrency, 1)
+	p := pool.New().WithMaxGoroutines(concurrency).WithErrors()
 	for _, s := range statements {
-		num, err := c.spannerClient.PartitionedUpdate(ctx, spanner.Statement{
-			SQL: s,
-		})
-		if err != nil {
-			return numAffectedRows, &Error{
-				Code: ErrorCodeUpdatePartitionedDML,
-				err:  err,
+		p.Go(func() error {
+			num, err := c.spannerClient.PartitionedUpdate(ctx, spanner.Statement{
+				SQL: s,
+			})
+			if err != nil {
+				return err
 			}
-		}
 
-		numAffectedRows += num
+			numAffectedRows.Add(num)
+			return nil
+		})
 	}
 
-	return numAffectedRows, nil
+	err := p.Wait()
+	if err != nil {
+		return numAffectedRows.Load(), &Error{
+			Code: ErrorCodeUpdatePartitionedDML,
+			err:  err,
+		}
+	}
+
+	return numAffectedRows.Load(), nil
 }
-func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) error {
+func (c *Client) UpgradeExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, protoDescriptors []byte) (MigrationsOutput, error) {
 	err := c.backfillMigrations(ctx, migrations, tableName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	err = c.ExecuteMigrations(ctx, migrations, limit, tableName)
+	migrationsOutput, err := c.ExecuteMigrations(ctx, migrations, limit, tableName, 1, protoDescriptors)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return c.markUpgradeComplete(ctx)
+	return migrationsOutput, nil
 }
 
 func (c *Client) backfillMigrations(ctx context.Context, migrations Migrations, tableName string) error {
@@ -335,7 +733,8 @@ func (c *Client) upsertVersionHistory(ctx context.Context, rw *spanner.ReadWrite
 			return rw.BufferWrite([]*spanner.Mutation{
 				spanner.Insert(historyTableName,
 					[]string{"Version", "Dirty", "Created", "Modified"},
-					[]interface{}{version, dirty, spanner.CommitTimestamp, spanner.CommitTimestamp})})
+					[]interface{}{version, dirty, spanner.CommitTimestamp, spanner.CommitTimestamp}),
+			})
 		}
 		return err
 	}
@@ -344,11 +743,12 @@ func (c *Client) upsertVersionHistory(ctx context.Context, rw *spanner.ReadWrite
 	return rw.BufferWrite([]*spanner.Mutation{
 		spanner.Update(historyTableName,
 			[]string{"Version", "Dirty", "Modified"},
-			[]interface{}{version, dirty, spanner.CommitTimestamp})})
+			[]interface{}{version, dirty, spanner.CommitTimestamp}),
+	})
 }
 
 func (c *Client) markUpgradeComplete(ctx context.Context) error {
-	err := c.ApplyDDL(ctx, []string{"DROP TABLE " + upgradeIndicator})
+	err := c.ApplyDDL(ctx, []string{"DROP TABLE " + upgradeIndicator}, nil)
 	if err != nil {
 		return &Error{
 			Code: ErrorCodeCompleteUpgrade,
@@ -360,6 +760,13 @@ func (c *Client) markUpgradeComplete(ctx context.Context) error {
 }
 
 func (c *Client) GetMigrationHistory(ctx context.Context, versionTableName string) ([]MigrationHistoryRecord, error) {
+	if !c.tableExists(ctx, versionTableName) {
+		return nil, &Error{
+			Code: ErrorCodeGetMigrationVersion,
+			err:  errors.New("Migration history table not found. Run a migration to enable history"),
+		}
+	}
+
 	history := make([]MigrationHistoryRecord, 0)
 	stmt := spanner.NewStatement("SELECT Version, Dirty, Created, Modified FROM " + versionTableName + historyStr)
 	err := c.spannerClient.Single().Query(ctx, stmt).Do(func(r *spanner.Row) error {
@@ -378,14 +785,41 @@ func (c *Client) GetMigrationHistory(ctx context.Context, versionTableName strin
 	return history, nil
 }
 
-func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string) error {
+type MigrationsOutput map[string]migrationInfo
+
+type migrationInfo struct {
+	RowsAffected int64
+}
+
+func (i MigrationsOutput) String() string {
+	if len(i) == 0 {
+		return ""
+	}
+
+	var filenames []string
+	for filename := range i {
+		filenames = append(filenames, filename)
+	}
+
+	sort.StringSlice(filenames).Sort()
+
+	output := "Migration Information:"
+	for _, filename := range filenames {
+		migrationInfo := i[filename]
+		output = fmt.Sprintf("%s\n%s - rows affected: %d", output, filename, migrationInfo.RowsAffected)
+	}
+
+	return fmt.Sprintf("%s\n", output)
+}
+
+func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, limit int, tableName string, partitionedConcurrency int, protoDescriptors []byte) (MigrationsOutput, error) {
 	sort.Sort(migrations)
 
 	version, dirty, err := c.GetSchemaMigrationVersion(ctx, tableName)
 	if err != nil {
 		var se *Error
 		if !errors.As(err, &se) || se.Code != ErrorCodeNoMigration {
-			return &Error{
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
 			}
@@ -393,25 +827,28 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 	}
 
 	if dirty {
-		return &Error{
+		return nil, &Error{
 			Code: ErrorCodeMigrationVersionDirty,
-			err:  fmt.Errorf("Database version: %d is dirty, please fix it.", version),
+			err:  fmt.Errorf("database version: %d is dirty, please fix it.", version),
 		}
 	}
 
 	history, err := c.GetMigrationHistory(ctx, tableName)
 	if err != nil {
-		return &Error{
+		return nil, &Error{
 			Code: ErrorCodeExecuteMigrations,
 			err:  err,
 		}
 	}
+
 	applied := make(map[int64]bool)
 	for i := range history {
 		applied[history[i].Version] = true
 	}
 
+	var migrationsOutput MigrationsOutput = make(MigrationsOutput)
 	var count int
+
 	for _, m := range migrations {
 		if limit == 0 {
 			break
@@ -421,30 +858,60 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			continue
 		}
 
-		if err := c.SetSchemaMigrationVersion(ctx, m.Version, true, tableName); err != nil {
-			return &Error{
+		if err := c.setSchemaMigrationVersion(ctx, m.Version, true, tableName); err != nil {
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
 			}
 		}
 
-		switch m.kind {
-		case statementKindDDL:
-			if err := c.ApplyDDL(ctx, m.Statements); err != nil {
-				return &Error{
+		statementKind := cmp.Or(m.Directives.StatementKind, m.Kind)
+		switch statementKind {
+		case StatementKindDDL:
+			if err := c.ApplyDDL(ctx, m.Statements, protoDescriptors); err != nil {
+				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
 				}
 			}
-		case statementKindDML:
-			if _, err := c.ApplyPartitionedDML(ctx, m.Statements); err != nil {
-				return &Error{
+		case StatementKindDML:
+			rowsAffected, err := c.ApplyDML(ctx, m.Statements)
+			if err != nil {
+				return nil, &Error{
 					Code: ErrorCodeExecuteMigrations,
 					err:  err,
 				}
+			}
+
+			migrationsOutput[m.FileName] = migrationInfo{
+				RowsAffected: rowsAffected,
+			}
+		case StatementKindPartitionedDML:
+			rowsAffected, err := c.ApplyPartitionedDML(ctx, m.Statements, partitionedConcurrency)
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+
+			migrationsOutput[m.FileName] = migrationInfo{
+				RowsAffected: rowsAffected,
+			}
+		case StatementKindConvergentDML:
+			rowsAffected, err := convergentApply(ctx, c.ApplyDML, m.Statements, m.Directives.Concurrency)
+			if err != nil {
+				return nil, &Error{
+					Code: ErrorCodeExecuteMigrations,
+					err:  err,
+				}
+			}
+
+			migrationsOutput[m.FileName] = migrationInfo{
+				RowsAffected: rowsAffected,
 			}
 		default:
-			return &Error{
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  fmt.Errorf("Unknown query type, version: %d", m.Version),
 			}
@@ -456,8 +923,8 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			fmt.Printf("%d/up\n", m.Version)
 		}
 
-		if err := c.SetSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
-			return &Error{
+		if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
+			return nil, &Error{
 				Code: ErrorCodeExecuteMigrations,
 				err:  err,
 			}
@@ -473,7 +940,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		fmt.Println("no change")
 	}
 
-	return nil
+	return migrationsOutput, nil
 }
 
 func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string) (uint, bool, error) {
@@ -511,16 +978,10 @@ func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string
 	return uint(v), dirty, nil
 }
 
-func (c *Client) SetSchemaMigrationVersion(ctx context.Context, version uint, dirty bool, tableName string) error {
+// setSchemaMigrationVersion will set a specific version in the version and history table without checking existing state
+func (c *Client) setSchemaMigrationVersion(ctx context.Context, version uint, dirty bool, tableName string) error {
 	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
-		m := []*spanner.Mutation{
-			spanner.Delete(tableName, spanner.AllKeys()),
-			spanner.Insert(
-				tableName,
-				[]string{"Version", "Dirty"},
-				[]interface{}{int64(version), dirty},
-			),
-		}
+		m := setSchemaVersionMutations(tableName, version, dirty)
 		if err := tx.BufferWrite(m); err != nil {
 			return err
 		}
@@ -535,6 +996,75 @@ func (c *Client) SetSchemaMigrationVersion(ctx context.Context, version uint, di
 	}
 
 	return nil
+}
+
+func setSchemaVersionMutations(tableName string, version uint, dirty bool) []*spanner.Mutation {
+	m := []*spanner.Mutation{
+		spanner.Delete(tableName, spanner.AllKeys()),
+		spanner.Insert(
+			tableName,
+			[]string{"Version", "Dirty"},
+			[]interface{}{int64(version), dirty},
+		),
+	}
+	return m
+}
+
+// RepairMigration will delete the dirty rows in the version and history tables
+func (c *Client) RepairMigration(ctx context.Context, tableName string) error {
+	tableNameHistory := tableName + historyStr
+
+	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+		m, err := deleteDirtyHistory(ctx, tx, tableNameHistory)
+		if err != nil {
+			return err
+		}
+
+		version, err := resetSchemaVersion(ctx, tx, tableNameHistory, tableName)
+		if err != nil {
+			return err
+		}
+		m = append(m, version...)
+
+		return tx.BufferWrite(m)
+	})
+	if err != nil {
+		return &Error{
+			Code: ErrorCodeUndirtyMigration,
+			err:  err,
+		}
+	}
+
+	return nil
+}
+
+func resetSchemaVersion(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string, tableName string) ([]*spanner.Mutation, error) {
+	latestSQL := "select * from " + tableNameHistory + " where dirty = FALSE order by version desc limit 1"
+	latest, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, latestSQL)
+	if err != nil {
+		return nil, err
+	}
+	if len(latest) != 1 {
+		return nil, errors.New("no undirty versions found")
+	}
+	version := setSchemaVersionMutations(tableName, uint(latest[0].Version), false)
+	return version, nil
+}
+
+func deleteDirtyHistory(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string) ([]*spanner.Mutation, error) {
+	sql := "select * from " + tableNameHistory + " where dirty = TRUE"
+	dirty, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := []spanner.Key{}
+	for _, record := range dirty {
+		keys = append(keys, spanner.Key{record.Version})
+	}
+
+	m := []*spanner.Mutation{spanner.Delete(tableNameHistory, spanner.KeySetFromKeys(keys...))}
+	return m, nil
 }
 
 func (c *Client) Close() error {
@@ -569,11 +1099,17 @@ func (c *Client) EnsureMigrationTable(ctx context.Context, tableName string) err
 		if err := c.createHistoryTable(ctx, tableName+historyStr); err != nil {
 			return fmtErr(err)
 		}
+		if err := c.SetupMigrationLock(ctx, tableName+lockStr); err != nil {
+			return fmtErr(err)
+		}
 	case ExistingMigrationsNoUpgrade:
 		if err := c.createUpgradeIndicatorTable(ctx); err != nil {
 			return fmtErr(err)
 		}
 		if err := c.createHistoryTable(ctx, tableName+historyStr); err != nil {
+			return fmtErr(err)
+		}
+		if err := c.SetupMigrationLock(ctx, tableName+lockStr); err != nil {
 			return fmtErr(err)
 		}
 	}
@@ -588,6 +1124,7 @@ AND table_name in (@version, @history, @indicator)`)
 	stmt.Params["history"] = tableName + historyStr
 	stmt.Params["indicator"] = upgradeIndicator
 	iter := c.spannerClient.Single().Query(ctx, stmt)
+	defer iter.Stop()
 
 	tables := make(map[string]bool)
 	err := iter.Do(func(r *spanner.Row) error {
@@ -618,7 +1155,7 @@ AND table_name in (@version, @history, @indicator)`)
 
 func (c *Client) tableExists(ctx context.Context, tableName string) bool {
 	ri := c.spannerClient.Single().Query(ctx, spanner.Statement{
-		SQL: "SELECT table_name FROM information_schema.tables WHERE table_catalog = '' AND table_name = @table",
+		SQL:    "SELECT table_name FROM information_schema.tables WHERE table_catalog = '' AND table_name = @table",
 		Params: map[string]interface{}{"table": tableName},
 	})
 	defer ri.Stop()
@@ -638,7 +1175,7 @@ func (c *Client) createHistoryTable(ctx context.Context, historyTableName string
 	Modified TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true)
 	) PRIMARY KEY(Version)`, historyTableName)
 
-	return c.ApplyDDL(ctx, []string{stmt})
+	return c.ApplyDDL(ctx, []string{stmt}, nil)
 }
 
 func (c *Client) createUpgradeIndicatorTable(ctx context.Context) error {
@@ -648,7 +1185,7 @@ func (c *Client) createUpgradeIndicatorTable(ctx context.Context) error {
 
 	stmt := fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
 
-	return c.ApplyDDL(ctx, []string{stmt})
+	return c.ApplyDDL(ctx, []string{stmt}, nil)
 }
 
 func (c *Client) createVersionTable(ctx context.Context, tableName string) error {
@@ -661,5 +1198,152 @@ func (c *Client) createVersionTable(ctx context.Context, tableName string) error
     Dirty    BOOL NOT NULL
 	) PRIMARY KEY(Version)`, tableName)
 
-	return c.ApplyDDL(ctx, []string{stmt})
+	return c.ApplyDDL(ctx, []string{stmt}, nil)
+}
+
+type MigrationLock struct {
+	Success        bool
+	Release        func()
+	LockIdentifier string    `spanner:"LockIdentifier"`
+	Expiry         time.Time `spanner:"Expiry"`
+}
+
+func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error {
+	if !c.tableExists(ctx, tableName) {
+		sql := fmt.Sprintf("CREATE TABLE %s(ID INT64, LockIdentifier STRING(200), Expiry TIMESTAMP) PRIMARY KEY(ID)", tableName)
+		err := c.ApplyDDL(ctx, []string{sql}, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		row, err := trx.ReadRow(ctx, tableName, spanner.Key{spanner.NullInt64{}}, []string{"LockIdentifier", "Expiry"})
+		if err != nil {
+			// insert
+			if spanner.ErrCode(err) == codes.NotFound {
+				return trx.BufferWrite([]*spanner.Mutation{
+					spanner.Insert(tableName,
+						[]string{"ID"},
+						[]interface{}{spanner.NullInt64{}}),
+				})
+			}
+			return err
+		}
+
+		lock := MigrationLock{}
+		err = row.ToStruct(&lock)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("clearing lock identifier [%s] expiry [%v]\n", lock.LockIdentifier, lock.Expiry)
+
+		// update
+		return trx.BufferWrite([]*spanner.Mutation{
+			spanner.Update(tableName,
+				[]string{"ID", "LockIdentifier", "Expiry"},
+				[]interface{}{spanner.NullInt64{}, spanner.NullString{}, spanner.NullTime{}}),
+		})
+	})
+
+	return err
+}
+
+func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier string) (lock MigrationLock, err error) {
+	lock = MigrationLock{
+		Release: func() {},
+	}
+
+	// skip if lock table not setup
+	if !c.tableExists(ctx, tableName) {
+		lock.Success = true
+		return lock, err
+	}
+	_, err = c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		sql := fmt.Sprintf(`UPDATE %s SET LockIdentifier=@lockIdentifier, 
+		Expiry = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 30 MINUTE) 
+		WHERE ID IS NULL AND (LockIdentifier IS NULL OR CURRENT_TIMESTAMP() > Expiry)`, tableName)
+		lockStmt := spanner.NewStatement(sql)
+		lockStmt.Params["lockIdentifier"] = lockIdentifier
+		rc, err := trx.Update(ctx, lockStmt)
+		if err != nil {
+			return err
+		}
+
+		lock.Success = rc == 1
+
+		sql2 := fmt.Sprintf("Select LockIdentifier, Expiry FROM %s WHERE ID IS NULL", tableName)
+		err = trx.Query(ctx, spanner.NewStatement(sql2)).
+			Do(func(r *spanner.Row) error {
+				if err := r.ToStruct(&lock); err != nil {
+					return err
+				}
+				return nil
+			})
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		return lock, err
+	}
+
+	// fmt.Printf("%v %s %v\n", lock.Success, lock.LockIdentifier, lock.Expiry)
+
+	lock.Release = func() {
+		err = c.releaseMigrationLock(ctx, tableName, lockIdentifier)
+		if err != nil {
+			fmt.Printf("failed to release migration lock: %v\n", err)
+		}
+	}
+
+	return lock, err
+}
+
+func (c *Client) releaseMigrationLock(ctx context.Context, tableName, lockIdentifier string) error {
+	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		sql := fmt.Sprintf("Update %s SET LockIdentifier=NULL, Expiry=NULL WHERE ID IS NULL AND LockIdentifier=@lockIdentifier", tableName)
+		stmt := spanner.NewStatement(sql)
+		stmt.Params["lockIdentifier"] = lockIdentifier
+		_, err := trx.Update(ctx, stmt)
+		if err != nil {
+			return err
+		}
+		// log.Printf("release migration lock %s %v\n", lockIdentifier, rc == 1)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func convergentApply(ctx context.Context, applyDMLFunc func(context.Context, []string) (int64, error), statements []string, concurrency int) (int64, error) {
+	concurrency = max(concurrency, 1)
+	p := pool.New().WithMaxGoroutines(concurrency).WithErrors()
+
+	// Apply each statement in the migration in a separate transaction.
+	var totalRowCount atomic.Int64
+	for _, statement := range statements {
+		p.Go(func() error {
+			for {
+				rowCount, err := applyDMLFunc(ctx, []string{statement})
+				if err != nil {
+					return err
+				}
+
+				if rowCount == 0 {
+					return nil
+				}
+				totalRowCount.Add(rowCount)
+			}
+		})
+	}
+
+	if err := p.Wait(); err != nil {
+		return 0, err
+	}
+	return totalRowCount.Load(), nil
 }

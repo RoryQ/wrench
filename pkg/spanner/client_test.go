@@ -20,14 +20,24 @@
 package spanner
 
 import (
-	"cloud.google.com/go/spanner"
+	"cmp"
 	"context"
 	"fmt"
-	"github.com/google/uuid"
-	"google.golang.org/api/iterator"
-	"io/ioutil"
 	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
 	"testing"
+	"time"
+
+	"cloud.google.com/go/spanner"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/api/iterator"
+
+	"github.com/roryq/wrench/pkg/spanner/testdata/with_proto/proto/types"
+	"github.com/roryq/wrench/pkg/spannerz"
 )
 
 const (
@@ -51,6 +61,16 @@ type (
 		Version int64
 		Dirty   bool
 	}
+
+	model struct {
+		ModelName string `spanner:"model_name"`
+	}
+
+	tableWithStatus struct {
+		ID          string             `spanner:"ID"`
+		Status      types.Status       `spanner:"Status"`
+		NestedField *types.ComplexType `spanner:"NestedField"`
+	}
 )
 
 const (
@@ -70,7 +90,7 @@ func TestLoadDDL(t *testing.T) {
 		t.Fatalf("failed to load ddl: %v", err)
 	}
 
-	wantDDL, err := ioutil.ReadFile("testdata/schema.sql")
+	wantDDL, err := os.ReadFile("testdata/schema.sql")
 	if err != nil {
 		t.Fatalf("failed to read ddl file: %v", err)
 	}
@@ -83,7 +103,7 @@ func TestLoadDDL(t *testing.T) {
 func TestApplyDDLFile(t *testing.T) {
 	ctx := context.Background()
 
-	ddl, err := ioutil.ReadFile("testdata/ddl.sql")
+	ddl, err := os.ReadFile("testdata/ddl.sql")
 	if err != nil {
 		t.Fatalf("failed to read ddl file: %v", err)
 	}
@@ -91,7 +111,7 @@ func TestApplyDDLFile(t *testing.T) {
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 
-	if err := client.ApplyDDLFile(ctx, ddl); err != nil {
+	if err := client.ApplyDDLFile(ctx, ddl, PlaceholderOptions{}, nil); err != nil {
 		t.Fatalf("failed to apply ddl file: %v", err)
 	}
 
@@ -123,21 +143,96 @@ func TestApplyDDLFile(t *testing.T) {
 	}
 }
 
+func TestApplyDDLFileWithPlaceholders(t *testing.T) {
+	ctx := context.Background()
+
+	ddl, err := os.ReadFile("testdata/placeholders/0001.sql")
+	if err != nil {
+		t.Fatalf("failed to read ddl file: %v", err)
+	}
+
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	placeholderOptions := PlaceholderOptions{
+		Placeholders:       TestPlaceholders,
+		ReplacementEnabled: true,
+	}
+	if err := client.ApplyDDLFile(ctx, ddl, placeholderOptions, nil); err != nil {
+		t.Fatalf("failed to apply ddl file: %v", err)
+	}
+
+	ri := client.spannerClient.Single().Query(ctx, spanner.Statement{
+		SQL: "SELECT model_name FROM information_schema.models WHERE model_catalog='' AND model_name= @model",
+		Params: map[string]interface{}{
+			"model": "custom_ai_model2",
+		},
+	})
+	defer ri.Stop()
+
+	row, err := ri.Next()
+	if err == iterator.Done {
+		t.Fatalf("failed to get table information: %v", err)
+	}
+
+	c := &model{}
+	if err := row.ToStruct(c); err != nil {
+		t.Fatalf("failed to convert row to struct: %v", err)
+	}
+
+	if want, got := "custom_ai_model2", c.ModelName; want != got {
+		t.Errorf("want %s, but got %s", want, got)
+	}
+}
+
 func TestApplyDMLFile(t *testing.T) {
 	ctx := context.Background()
 
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 
-	tests := map[string]struct {
-		partitioned bool
+	tests := []struct {
+		name                   string
+		dmlFile                string
+		partitioned            bool
+		placeholderOptions     PlaceholderOptions
+		partitionedConcurrency int
+		wantRowValue           singer
 	}{
-		"normal DML":      {partitioned: false},
-		"partitioned DML": {partitioned: true},
+		{
+			name:         "normal DML",
+			dmlFile:      "testdata/dml.sql",
+			partitioned:  false,
+			wantRowValue: singer{SingerID: "1", FirstName: "Bar"},
+		},
+		{
+			name:        "normal DML with placeholders",
+			dmlFile:     "testdata/dml_with_placeholders.sql",
+			partitioned: false,
+			placeholderOptions: PlaceholderOptions{
+				Placeholders:       TestPlaceholders,
+				ReplacementEnabled: true,
+			},
+			wantRowValue: singer{SingerID: "1", FirstName: "projectID134-instanceID456-databaseID789"},
+		},
+		{
+			name:                   "partitioned DML",
+			dmlFile:                "testdata/dml.sql",
+			partitioned:            true,
+			partitionedConcurrency: 1,
+			wantRowValue:           singer{SingerID: "1", FirstName: "Bar"},
+		},
+		{
+			name:                   "partitioned DML concurrently",
+			dmlFile:                "testdata/dml.sql",
+			partitioned:            true,
+			partitionedConcurrency: 10,
+			wantRowValue:           singer{SingerID: "1", FirstName: "Bar"},
+		},
 	}
 
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			key := "1"
 
 			_, err := client.spannerClient.Apply(
@@ -150,12 +245,12 @@ func TestApplyDMLFile(t *testing.T) {
 				t.Fatalf("failed to apply mutation: %v", err)
 			}
 
-			dml, err := ioutil.ReadFile("testdata/dml.sql")
+			dml, err := os.ReadFile(tc.dmlFile)
 			if err != nil {
 				t.Fatalf("failed to read dml file: %v", err)
 			}
 
-			n, err := client.ApplyDMLFile(ctx, dml, test.partitioned)
+			n, err := client.ApplyDMLFile(ctx, dml, tc.partitioned, tc.partitionedConcurrency, tc.placeholderOptions)
 			if err != nil {
 				t.Fatalf("failed to apply dml file: %v", err)
 			}
@@ -164,19 +259,17 @@ func TestApplyDMLFile(t *testing.T) {
 				t.Fatalf("want %d, but got %d", want, got)
 			}
 
-			row, err := client.spannerClient.Single().ReadRow(ctx, singerTable, spanner.Key{key}, []string{"FirstName"})
+			row, err := client.spannerClient.Single().ReadRow(ctx, singerTable, spanner.Key{key}, []string{"SingerID", "FirstName"})
 			if err != nil {
 				t.Fatalf("failed to read row: %v", err)
 			}
 
-			s := &singer{}
-			if err := row.ToStruct(s); err != nil {
+			gotRowValue := &singer{}
+			if err := row.ToStruct(gotRowValue); err != nil {
 				t.Fatalf("failed to convert row to struct: %v", err)
 			}
 
-			if want, got := "Bar", s.FirstName; want != got {
-				t.Errorf("want %s, but got %s", want, got)
-			}
+			assert.Equal(t, &tc.wantRowValue, gotRowValue, "want %v, but got %v", tc.wantRowValue, gotRowValue)
 		})
 	}
 }
@@ -198,14 +291,19 @@ func TestExecuteMigrations(t *testing.T) {
 		t.Fatalf("failed to apply mutation: %v", err)
 	}
 
-	migrations, err := LoadMigrations("testdata/migrations")
+	migrations, err := LoadMigrations("testdata/migrations", nil, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
 
+	var migrationsOutput MigrationsOutput
 	// only apply 000002.sql by specifying limit 1.
-	if err := client.ExecuteMigrations(ctx, migrations, 1, migrationTable); err != nil {
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
+	}
+
+	if len(migrationsOutput) != 0 {
+		t.Errorf("want zero length migrationInfo, but got %v", len(migrationsOutput))
 	}
 
 	// ensure that only 000002.sql has been applied.
@@ -213,18 +311,56 @@ func TestExecuteMigrations(t *testing.T) {
 	ensureMigrationVersionRecord(t, ctx, client, 2, false)
 	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
 
-	if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	// execute remaining migrations
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 
-	// ensure that 000003.sql and 000004.sql have been applied.
+	if want, got := int64(1), migrationsOutput["000003.sql"].RowsAffected; want != got {
+		t.Errorf("migration %q: want %d rows affected, but got %d", "000003.sql", want, got)
+	}
+
+	// ensure that 000003.sql, 000004.sql, and 000005.sql have been applied.
 	ensureMigrationColumn(t, ctx, client, "LastName", "STRING(MAX)", "NO")
-	ensureMigrationVersionRecord(t, ctx, client, 4, false)
-	ensureMigrationHistoryRecord(t, ctx, client, 4, false)
+	ensureMigrationVersionRecord(t, ctx, client, 5, false)
+	ensureMigrationHistoryRecord(t, ctx, client, 5, false)
 
 	// ensure that schema is not changed and ExecuteMigrate is safely finished even though no migrations should be applied.
 	ensureMigrationColumn(t, ctx, client, "LastName", "STRING(MAX)", "NO")
-	ensureMigrationVersionRecord(t, ctx, client, 4, false)
+	ensureMigrationVersionRecord(t, ctx, client, 5, false)
+
+	// ensure that 000005.sql has been applied, inserting an additional 4 rows
+	if want, got := int64(4), migrationsOutput["000005.sql"].RowsAffected; want != got {
+		t.Errorf("migration %q: want %d rows affected, but got %d", "000005.sql", want, got)
+	}
+}
+
+func TestExecuteMigrationsWithPlaceholders(t *testing.T) {
+	ctx := context.Background()
+
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	// Skip the first migration as it involves an LLM model registration statement that is not supported by the emulator.
+	migrations, err := LoadMigrations("testdata/placeholders", nil, false, PlaceholderOptions{
+		Placeholders:       TestPlaceholders,
+		ReplacementEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("failed to load migrations: %v", err)
+	}
+
+	var migrationsOutput MigrationsOutput
+	if migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, 1, migrationTable, 1, nil); err != nil {
+		t.Fatalf("failed to execute migration: %v", err)
+	}
+
+	if len(migrationsOutput) != 0 {
+		t.Errorf("want zero length migrationInfo, but got %v", len(migrationsOutput))
+	}
+
+	// ensure that only 0002.sql has been applied.
+	ensureMigrationVersionRecord(t, ctx, client, 1, false)
 }
 
 func ensureMigrationColumn(t *testing.T, ctx context.Context, client *Client, columnName, spannerType, isNullable string) {
@@ -261,7 +397,7 @@ func ensureMigrationColumn(t *testing.T, ctx context.Context, client *Client, co
 func ensureMigrationHistoryRecord(t *testing.T, ctx context.Context, client *Client, version int64, dirty bool) {
 	history, err := client.GetMigrationHistory(ctx, migrationTable)
 	for i := range history {
-		if history[i].Version == version && history[i].Dirty == dirty{
+		if history[i].Version == version && history[i].Dirty == dirty {
 			return
 		}
 	}
@@ -349,7 +485,7 @@ func TestSetSchemaMigrationVersion(t *testing.T) {
 	nextVersion := 2
 	nextDirty := true
 
-	if err := client.SetSchemaMigrationVersion(ctx, uint(nextVersion), nextDirty, migrationTable); err != nil {
+	if err := client.setSchemaMigrationVersion(ctx, uint(nextVersion), nextDirty, migrationTable); err != nil {
 		t.Fatalf("failed to set version: %v", err)
 	}
 
@@ -463,7 +599,7 @@ func TestClient_DetermineUpgradeStatus(t *testing.T) {
 			defer done()
 
 			if tt.args.ddlStatement != "" {
-				err := client.ApplyDDL(ctx, []string{tt.args.ddlStatement})
+				err := client.ApplyDDL(ctx, []string{tt.args.ddlStatement}, nil)
 				if err != nil {
 					t.Error(err)
 				}
@@ -482,17 +618,90 @@ func TestClient_DetermineUpgradeStatus(t *testing.T) {
 	}
 }
 
+func TestMigrationWithProto(t *testing.T) {
+	ctx := context.Background()
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	migrations, err := LoadMigrations("testdata/with_proto/migrations", nil, false, PlaceholderOptions{})
+	if err != nil {
+		t.Fatalf("failed to load migrations: %v", err)
+	}
+	protoDescriptors, err := os.ReadFile("testdata/with_proto/proto/types_descriptor.pb")
+	if err != nil {
+		t.Fatalf("failed to load migrations: %v", err)
+	}
+	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, protoDescriptors); err != nil {
+		t.Fatalf("failed to execute migration: %v", err)
+	}
+	history, err := client.GetMigrationHistory(ctx, migrationTable)
+	if err != nil {
+		t.Fatalf("failed to get migration history: %v", err)
+	}
+	if len(history) != 1 {
+		t.Errorf("incorrect history versions: %+v", history)
+	}
+	ensureMigrationHistoryRecord(t, ctx, client, 1, false)
+
+	// Insert and read back to ensure correct behaviour with proto
+	testData := &tableWithStatus{
+		ID:     uuid.NewString(),
+		Status: types.Status_STATUS_ACTIVE,
+		NestedField: &types.ComplexType{
+			Field: &types.NestedComplexType{
+				Value:  "test",
+				Status: types.Status_STATUS_SKIPPED,
+			},
+		},
+	}
+	mutation, err := spanner.InsertStruct("TableWithStatus", testData)
+	if err != nil {
+		t.Fatalf("failed to create insert mutation: %v", err)
+	}
+	_, err = client.spannerClient.Apply(ctx, []*spanner.Mutation{mutation})
+	if err != nil {
+		t.Fatalf("failed to insert row with proto using struct: %v", err)
+	}
+	row, err := client.spannerClient.Single().ReadRow(ctx, "TableWithStatus", spanner.Key{testData.ID}, []string{"ID", "Status", "NestedField"})
+	if err != nil {
+		t.Fatalf("failed to read row: %v", err)
+	}
+
+	readData := &tableWithStatus{}
+	if err := row.ToStruct(readData); err != nil {
+		t.Fatalf("failed to scan row to struct: %v", err)
+	}
+	if want, got := testData.ID, readData.ID; want != got {
+		t.Errorf("want ID %s, but got %s", want, got)
+	}
+	if want, got := testData.Status, readData.Status; want != got {
+		t.Errorf("want Status %v, but got %v", want, got)
+	}
+	if want, got := "STATUS_ACTIVE", readData.Status.String(); want != got {
+		t.Errorf("want Status string %s, but got %s", want, got)
+	}
+	if want, got := testData.NestedField.Field.Value, readData.NestedField.Field.Value; want != got {
+		t.Errorf("want nested value %v, but got %v", want, got)
+	}
+	if want, got := testData.NestedField.Field.Status, readData.NestedField.Field.Status; want != got {
+		t.Errorf("want nested status %v, but got %v", want, got)
+	}
+	if want, got := "STATUS_SKIPPED", readData.NestedField.Field.Status.String(); want != got {
+		t.Errorf("want nested status string %v, but got %v", want, got)
+	}
+}
+
 func TestHotfixMigration(t *testing.T) {
 	ctx := context.Background()
 	client, done := testClientWithDatabase(t, ctx)
 	defer done()
 
 	// apply changes from "trunk": [100, 200]
-	migrations, err := LoadMigrations("testdata/hotfix/a")
+	migrations, err := LoadMigrations("testdata/hotfix/a", nil, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if _, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -506,11 +715,11 @@ func TestHotfixMigration(t *testing.T) {
 	ensureMigrationHistoryRecord(t, ctx, client, 200, false)
 
 	// apply changes from "hotfix" branch: [101]
-	migrations, err = LoadMigrations("testdata/hotfix/b")
+	migrations, err = LoadMigrations("testdata/hotfix/b", nil, false, PlaceholderOptions{})
 	if err != nil {
 		t.Fatalf("failed to load migrations: %v", err)
 	}
-	if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+	if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 		t.Fatalf("failed to execute migration: %v", err)
 	}
 	history, err = client.GetMigrationHistory(ctx, migrationTable)
@@ -530,11 +739,11 @@ func TestUpgrade(t *testing.T) {
 		defer done()
 
 		// run migrations
-		migrations, err := LoadMigrations("testdata/migrations")
+		migrations, err := LoadMigrations("testdata/migrations", nil, false, PlaceholderOptions{})
 		if err != nil {
 			t.Fatalf("failed to load migrations: %v", err)
 		}
-		if err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+		if _, err := client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 		expected, err := client.GetMigrationHistory(ctx, migrationTable)
@@ -543,7 +752,7 @@ func TestUpgrade(t *testing.T) {
 		}
 
 		// clear history table
-		if err := client.ApplyDDL(ctx, []string{"DROP TABLE " + migrationTable + historyStr}); err != nil {
+		if err := client.ApplyDDL(ctx, []string{"DROP TABLE " + migrationTable + historyStr}, nil); err != nil {
 			t.Fatalf("failed to drop migration history: %v", err)
 		}
 		if err := client.EnsureMigrationTable(ctx, migrationTable); err != nil {
@@ -552,7 +761,7 @@ func TestUpgrade(t *testing.T) {
 		if client.tableExists(ctx, upgradeIndicator) == false {
 			t.Error("upgrade indicator should exist")
 		}
-		if err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable); err != nil {
+		if _, err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable, nil); err != nil {
 			t.Fatalf("failed to execute migration: %v", err)
 		}
 
@@ -581,7 +790,6 @@ func TestUpgrade(t *testing.T) {
 			t.Errorf("missing version in history table %+v", actual)
 		}
 	})
-
 }
 
 func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func()) {
@@ -616,14 +824,17 @@ func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func())
 		t.Fatalf("failed to create spanner client: %v", err)
 	}
 
-	ddl, err := ioutil.ReadFile("testdata/schema.sql")
+	ddl, err := os.ReadFile("testdata/schema.sql")
 	if err != nil {
 		t.Fatalf("failed to read schema file: %v", err)
 	}
 
-	if err := client.CreateDatabase(ctx, ddl); err != nil {
+	if err := client.CreateDatabase(ctx, ddl, nil); err != nil {
 		t.Fatalf("failed to create database: %v", err)
 	}
+
+	// emulator weirdness in CI
+	time.Sleep(100 * time.Millisecond)
 
 	return client, func() {
 		defer client.Close()
@@ -633,4 +844,464 @@ func testClientWithDatabase(t *testing.T, ctx context.Context) (*Client, func())
 		}
 		t.Log("dropped database " + database)
 	}
+}
+
+func Test_parseDDL(t *testing.T) {
+	type args struct {
+		statement string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantDdl SchemaDDL
+		wantErr bool
+	}{
+		{
+			name: "CREATE TABLE",
+			args: args{"CREATE TABLE Example(ID string) PRIMARY KEY(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE TABLE Example(ID string) PRIMARY KEY(ID)",
+				Filename:   "example.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE INDEX",
+			args: args{"CREATE INDEX IX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE NULL_FILTERED INDEX",
+			args: args{"CREATE NULL_FILTERED INDEX NFX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE NULL_FILTERED INDEX NFX_Example ON Example(ID)",
+				Filename:   "nfx_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE UNIQUE INDEX",
+			args: args{"CREATE UNIQUE INDEX UX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE UNIQUE INDEX UX_Example ON Example(ID)",
+				Filename:   "ux_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE UNIQUE NULL_FILTERED INDEX",
+			args: args{"CREATE UNIQUE NULL_FILTERED INDEX UX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE UNIQUE NULL_FILTERED INDEX UX_Example ON Example(ID)",
+				Filename:   "ux_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE		UNIQUE  NULL_FILTERED   INDEX",
+			args: args{"CREATE\t\tUNIQUE  NULL_FILTERED   INDEX UX_Example ON Example(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE\t\tUNIQUE  NULL_FILTERED   INDEX UX_Example ON Example(ID)",
+				Filename:   "ux_example.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "ALTER TABLE",
+			args: args{"ALTER TABLE Singers ADD COLUMN Age INT64"},
+			wantDdl: SchemaDDL{
+				Statement:  "ALTER TABLE Singers ADD COLUMN Age INT64",
+				Filename:   "singers.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE TABLE IF NOT EXISTS",
+			args: args{"CREATE TABLE IF NOT EXISTS Singers (ID INT64) PRIMARY KEY(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE TABLE IF NOT EXISTS Singers (ID INT64) PRIMARY KEY(ID)",
+				Filename:   "singers.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "Metadata lookup for ALTER TABLE",
+			args: args{"ALTER TABLE MyTable ADD COLUMN Foo STRING(MAX)"},
+			// Passing objects map to verify metadata lookup
+			wantDdl: SchemaDDL{
+				Statement:  "ALTER TABLE MyTable ADD COLUMN Foo STRING(MAX)",
+				Filename:   "mytable.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE VIEW IF NOT EXISTS",
+			args: args{"CREATE VIEW IF NOT EXISTS MyView AS SELECT 1"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE VIEW IF NOT EXISTS MyView AS SELECT 1",
+				Filename:   "myview.sql",
+				ObjectType: "view",
+			},
+		},
+		{
+			name: "CREATE INDEX IF NOT EXISTS",
+			args: args{"CREATE INDEX IF NOT EXISTS MyIndex ON MyTable(Col)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE INDEX IF NOT EXISTS MyIndex ON MyTable(Col)",
+				Filename:   "myindex.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE CHANGE STREAM",
+			args: args{"CREATE CHANGE STREAM MyStream FOR ALL"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE CHANGE STREAM MyStream FOR ALL",
+				Filename:   "mystream.sql",
+				ObjectType: "change_stream",
+			},
+		},
+		{
+			name: "Empty statement",
+			args: args{""},
+			wantErr: true,
+		},
+		{
+			name: "Unidentifiable statement",
+			args: args{"SELECT 1"},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var objects map[string]string
+			if tt.name == "Metadata lookup for ALTER TABLE" {
+				objects = map[string]string{"mytable": "table"}
+			}
+			gotDdl, err := parseDDL(tt.args.statement, objects)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseDDL() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(gotDdl, tt.wantDdl) {
+				t.Errorf("parseDDL() gotDdl = %v, want %v", gotDdl, tt.wantDdl)
+			}
+		})
+	}
+}
+
+func TestClient_RepairMigration(t *testing.T) {
+	ctx := context.Background()
+	client, done := testClientWithDatabase(t, ctx)
+	defer done()
+
+	// Create some successful migrations
+	migrationDir := t.TempDir()
+	newFile(t, migrationDir, "000001.sql", []byte(`ALTER TABLE Singers ADD COLUMN LastName STRING(MAX);`))
+	newFile(t, migrationDir, "000002.sql", []byte(`ALTER TABLE Singers ALTER COLUMN LastName STRING(MAX) NOT NULL;`))
+
+	// Run successful migrations
+	err := migrateUpDir(t, ctx, client, migrationDir)
+	require.NoError(t, err, "error running migrations")
+
+	// Add a bad migration to the directory
+	newFile(t, migrationDir, "000003.sql", []byte(`ALTER TABLE Singers DROP COLUMN SingerID; -- Attempt to drop PK`))
+
+	// Make dirty with bad migration
+	err = migrateUpDir(t, ctx, client, migrationDir)
+	assert.EqualError(t, err, "Cannot drop key column SingerID from table Singers.")
+
+	assertDirtyCount := func(isDirty bool, expected int64) {
+		dirtyCount, err := spannerz.ReadColumnSQL[int64](ctx, client.spannerClient.Single(),
+			fmt.Sprintf("select count(1) from SchemaMigrationsHistory where Dirty = %v", isDirty))
+		assert.NoError(t, err)
+		assert.EqualValues(t, expected, dirtyCount)
+	}
+	const dirty, clean = true, false
+	assertDirtyCount(dirty, 1)
+	assertDirtyCount(clean, 2)
+	version, isDirty, err := client.GetSchemaMigrationVersion(ctx, migrationTable)
+	assert.NoError(t, err)
+	assert.EqualValues(t, 3, version) // failed on 3
+	assert.True(t, isDirty)
+
+	// is idempotent
+	for i := 0; i < 2; i++ {
+		// repair migration
+		err = client.RepairMigration(ctx, migrationTable)
+		assert.NoError(t, err)
+
+		assertDirtyCount(dirty, 0)
+		assertDirtyCount(clean, 2)
+		version, isDirty, err = client.GetSchemaMigrationVersion(ctx, migrationTable)
+		assert.NoError(t, err)
+		assert.EqualValues(t, 2, version) // back to 2
+		assert.False(t, isDirty)
+	}
+}
+
+func Test_MigrationInfoString(t *testing.T) {
+	tests := []struct {
+		testName        string
+		migrationInfo   MigrationsOutput
+		exptectedOutput string
+	}{
+		{
+			testName:        "no results",
+			migrationInfo:   MigrationsOutput{},
+			exptectedOutput: "",
+		},
+		{
+			testName:        "unitiated results - panic resiliant",
+			exptectedOutput: "",
+		},
+		{
+			testName: "one result",
+			migrationInfo: MigrationsOutput{
+				"i-deleted-everything.sql": migrationInfo{
+					RowsAffected: 2000,
+				},
+			},
+			exptectedOutput: "Migration Information:\ni-deleted-everything.sql - rows affected: 2000\n",
+		},
+		{
+			testName: "many results",
+			migrationInfo: MigrationsOutput{
+				"0001-i-am-a-cool-update.sql": migrationInfo{
+					RowsAffected: 20,
+				},
+				"0002-not-as-cool-as-me.sql": migrationInfo{
+					RowsAffected: 25,
+				},
+				"0003-i-deleted-everything.sql": migrationInfo{
+					RowsAffected: 2000,
+				},
+			},
+			exptectedOutput: "Migration Information:\n0001-i-am-a-cool-update.sql - rows affected: 20\n0002-not-as-cool-as-me.sql - rows affected: 25\n0003-i-deleted-everything.sql - rows affected: 2000\n",
+		},
+	}
+
+	for _, test := range tests {
+		output := test.migrationInfo.String()
+		assert.Equal(t, test.exptectedOutput, output)
+	}
+}
+
+func migrateUpDir(t *testing.T, ctx context.Context, client *Client, dir string, toSkip ...uint) error {
+	t.Helper()
+	migrations, err := LoadMigrations(dir, toSkip, false, PlaceholderOptions{})
+	if err != nil {
+		return err
+	}
+
+	_, err = client.ExecuteMigrations(ctx, migrations, len(migrations), migrationTable, 1, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func Test_parseDDL1(t *testing.T) {
+	tests := map[string]struct {
+		statement string
+		wantDdl   SchemaDDL
+		wantErr   assert.ErrorAssertionFunc
+	}{
+		"CREATE TABLE": {
+			statement: "CREATE TABLE Example(ID string) PRIMARY KEY(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE TABLE Example(ID string) PRIMARY KEY(ID)",
+				Filename:   "example.sql",
+				ObjectType: "table",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE INDEX": {
+			statement: "CREATE INDEX IX_Example ON Example(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE NULL_FILTERED INDEX": {
+			statement: "CREATE NULL_FILTERED INDEX IX_Example ON Example(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE NULL_FILTERED INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE UNIQUE INDEX": {
+			statement: "CREATE UNIQUE INDEX IX_Example ON Example(ID)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE UNIQUE INDEX IX_Example ON Example(ID)",
+				Filename:   "ix_example.sql",
+				ObjectType: "index",
+			},
+			wantErr: assert.NoError,
+		},
+		"CREATE VIEW": {
+			statement: "CREATE VIEW SingerNames\nSQL SECURITY INVOKER\nAS SELECT\n   Singers.SingerId AS SingerId,\n   Singers.FirstName || ' ' || Singers.LastName AS Name\nFROM Singers;",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE VIEW SingerNames\nSQL SECURITY INVOKER\nAS SELECT\n   Singers.SingerId AS SingerId,\n   Singers.FirstName || ' ' || Singers.LastName AS Name\nFROM Singers;",
+				Filename:   "singernames.sql",
+				ObjectType: "view",
+			},
+			wantErr: assert.NoError,
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			gotDdl, err := parseDDL(tt.statement, nil)
+			if !tt.wantErr(t, err, fmt.Sprintf("parseDDL(%v)", tt.statement)) {
+				return
+			}
+			assert.Equalf(t, tt.wantDdl, gotDdl, "parseDDL(%v)", tt.statement)
+		})
+	}
+}
+
+func Test_convergentApply(t *testing.T) {
+	// create a new "apply" function that executes each statement 11 times, the
+	// first 10 times returning 100 rows and the 11th time returning 0 rows.
+	newApplyFunc := func(t *testing.T) (func(context.Context, []string) (int64, error), *[]string) {
+		var callHistory []string
+		var mu sync.Mutex
+		applyFn := func(_ context.Context, s []string) (int64, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			require.Len(t, s, 1)
+			callHistory = append(callHistory, s[0])
+
+			if countOccurrences(callHistory, s[0]) > 10 {
+				return 0, nil
+			}
+
+			// Return a static 100 "rows affected" per call the first 10 times
+			return 100, nil
+		}
+		return applyFn, &callHistory
+	}
+
+	t.Run("CallsEachStatementUntilNoRowsUpdated", func(t *testing.T) {
+		applyFn, callHistory := newApplyFunc(t)
+
+		stmts := []string{"stmt1", "stmt2", "stmt3"}
+		got, err := convergentApply(context.Background(), applyFn, stmts, 1)
+		require.NoError(t, err)
+
+		// Total number of rows should equal the number of times each statement was called
+		expectedRowCount := 3000 // 3 statements * (10 calls * 100 row count + 1 call * 0 row count)
+		assert.EqualValues(t, expectedRowCount, got)
+
+		// Validate that each statement was called the expected number of times
+		for _, stmt := range stmts {
+			assert.Equal(t, 11, countOccurrences(*callHistory, stmt))
+		}
+
+		// Validate that calls were ordered with concurrency = 1
+		assertOrdered(t, *callHistory)
+	})
+
+	t.Run("Concurrency>1", func(t *testing.T) {
+		applyFn, callHistory := newApplyFunc(t)
+
+		stmts := []string{"stmt1", "stmt2", "stmt3", "stmt4", "stmt5", "stmt6"}
+		got, err := convergentApply(context.Background(), applyFn, stmts, 10)
+		require.NoError(t, err)
+
+		// Total number of rows should equal the number of times each statement was called
+		expectedRowCount := 6000 // 6 statements * (10 calls * 100 row count + 1 call * 0 row count)
+		assert.EqualValues(t, expectedRowCount, got)
+
+		// Validate that each statement was called the expected number of times
+		for _, stmt := range stmts {
+			assert.Equal(t, 11, countOccurrences(*callHistory, stmt))
+		}
+
+		// Validate that calls were unordered with concurrency > 1
+		assertNotOrdered(t, *callHistory)
+	})
+
+	t.Run("Error", func(t *testing.T) {
+		applyFn := func(_ context.Context, s []string) (int64, error) {
+			return 0, assert.AnError
+		}
+		got, err := convergentApply(context.Background(), applyFn, []string{"stmt1", "stmt2", "stmt3"}, 1)
+		require.ErrorIs(t, err, assert.AnError)
+		assert.Zero(t, got)
+	})
+}
+
+func assertOrdered[T cmp.Ordered](t *testing.T, vs []T) {
+	assert.True(t, isOrdered(vs), "slice is unordered: %v", vs)
+}
+
+func assertNotOrdered[T cmp.Ordered](t *testing.T, vs []T) {
+	assert.False(t, isOrdered(vs), "slice is ordered: %v", vs)
+}
+
+func isOrdered[T cmp.Ordered](vs []T) bool {
+	for i := 0; i < len(vs)-1; i++ {
+		if vs[i] > vs[i+1] {
+			return false
+		}
+	}
+	return true
+}
+
+func countOccurrences(s []string, v string) int {
+	var c int
+	for _, i := range s {
+		if i == v {
+			c++
+		}
+	}
+	return c
+}
+
+func Test_tokenize(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want []string
+	}{
+		{
+			name: "simple",
+			s:    "CREATE TABLE Singers ( SingerId INT64 ) PRIMARY KEY ( SingerId )",
+			want: []string{"CREATE", "TABLE", "Singers", "SingerId", "INT64", "PRIMARY", "KEY", "SingerId"},
+		},
+		{
+			name: "escaped single quote",
+			s:    "CREATE TABLE 'H''S' ( SingerId INT64 )",
+			want: []string{"CREATE", "TABLE", "'H''S'", "SingerId", "INT64"},
+		},
+		{
+			name: "escaped double quote",
+			s:    "CREATE TABLE \"H\"\"S\" ( SingerId INT64 )",
+			want: []string{"CREATE", "TABLE", "\"H\"\"S\"", "SingerId", "INT64"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, tokenize(tt.s), "tokenize(%v)", tt.s)
+		})
+	}
+}
+
+func newFile(t *testing.T, dir, fileName string, content []byte) {
+	file, err := os.Create(filepath.Join(dir, fileName))
+	require.NoError(t, err)
+	defer func(file *os.File) { _ = file.Close() }(file)
+
+	_, err = file.Write(content)
+	require.NoError(t, err)
 }

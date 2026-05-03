@@ -26,7 +26,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -911,10 +910,124 @@ func Test_parseDDL(t *testing.T) {
 				ObjectType: "index",
 			},
 		},
+		{
+			name: "ALTER TABLE",
+			args: args{"ALTER TABLE Singers ADD COLUMN Age INT64"},
+			wantDdl: SchemaDDL{
+				Statement:  "ALTER TABLE Singers ADD COLUMN Age INT64",
+				Filename:   "singers.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE TABLE IF NOT EXISTS",
+			args: args{"CREATE TABLE IF NOT EXISTS Singers (ID INT64) PRIMARY KEY(ID)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE TABLE IF NOT EXISTS Singers (ID INT64) PRIMARY KEY(ID)",
+				Filename:   "singers.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "Metadata lookup for ALTER TABLE",
+			args: args{"ALTER TABLE MyTable ADD COLUMN Foo STRING(MAX)"},
+			// Passing objects map to verify metadata lookup
+			wantDdl: SchemaDDL{
+				Statement:  "ALTER TABLE MyTable ADD COLUMN Foo STRING(MAX)",
+				Filename:   "mytable.sql",
+				ObjectType: "table",
+			},
+		},
+		{
+			name: "CREATE VIEW IF NOT EXISTS",
+			args: args{"CREATE VIEW IF NOT EXISTS MyView AS SELECT 1"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE VIEW IF NOT EXISTS MyView AS SELECT 1",
+				Filename:   "myview.sql",
+				ObjectType: "view",
+			},
+		},
+		{
+			name: "CREATE FUNCTION",
+			args: args{"CREATE OR REPLACE FUNCTION MyFunction() RETURNS INT64 AS (1)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE OR REPLACE FUNCTION MyFunction() RETURNS INT64 AS (1)",
+				Filename:   "myfunction.sql",
+				ObjectType: "function",
+			},
+		},
+		{
+			name: "CREATE SCHEMA",
+			args: args{"CREATE SCHEMA my_schema"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE SCHEMA my_schema",
+				Filename:   "my_schema.sql",
+				ObjectType: "schema",
+			},
+		},
+		{
+			name: "CREATE PLACEMENT",
+			args: args{"CREATE PLACEMENT my_placement OPTIONS (instance_partition = 'partition-1')"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE PLACEMENT my_placement OPTIONS (instance_partition = 'partition-1')",
+				Filename:   "my_placement.sql",
+				ObjectType: "placement",
+			},
+		},
+		{
+			name: "CREATE SYNONYM",
+			args: args{"CREATE SYNONYM MySynonym FOR MyTable"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE SYNONYM MySynonym FOR MyTable",
+				Filename:   "mysynonym.sql",
+				ObjectType: "synonym",
+			},
+		},
+		{
+			name: "ALTER DATABASE ADD PROTO BUNDLE",
+			args: args{"ALTER DATABASE db ADD PROTO BUNDLE (wrench.test.Type)"},
+			wantDdl: SchemaDDL{
+				Statement:  "ALTER DATABASE db ADD PROTO BUNDLE (wrench.test.Type)",
+				Filename:   "bundle.sql",
+				ObjectType: "proto_bundle",
+			},
+		},
+		{
+			name: "CREATE INDEX IF NOT EXISTS",
+			args: args{"CREATE INDEX IF NOT EXISTS MyIndex ON MyTable(Col)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE INDEX IF NOT EXISTS MyIndex ON MyTable(Col)",
+				Filename:   "myindex.sql",
+				ObjectType: "index",
+			},
+		},
+		{
+			name: "CREATE CHANGE STREAM",
+			args: args{"CREATE CHANGE STREAM MyStream FOR ALL"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE CHANGE STREAM MyStream FOR ALL",
+				Filename:   "mystream.sql",
+				ObjectType: "change_stream",
+			},
+		},
+		{
+			name:    "Empty statement",
+			args:    args{""},
+			wantErr: true,
+		},
+		{
+			name:    "Unidentifiable statement",
+			args:    args{"SELECT 1"},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDdl, err := parseDDL(tt.args.statement)
+			var objects map[string]string
+			if tt.name == "Metadata lookup for ALTER TABLE" {
+				objects = map[string]string{"mytable": "table"}
+			}
+			gotDdl, err := parseDDL(tt.args.statement, objects)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseDDL() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1089,10 +1202,19 @@ func Test_parseDDL1(t *testing.T) {
 			},
 			wantErr: assert.NoError,
 		},
+		"CREATE FUNCTION": {
+			statement: "CREATE OR REPLACE FUNCTION MyFunction() RETURNS INT64 AS (1)",
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE OR REPLACE FUNCTION MyFunction() RETURNS INT64 AS (1)",
+				Filename:   "myfunction.sql",
+				ObjectType: "function",
+			},
+			wantErr: assert.NoError,
+		},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
-			gotDdl, err := parseDDL(tt.statement)
+			gotDdl, err := parseDDL(tt.statement, nil)
 			if !tt.wantErr(t, err, fmt.Sprintf("parseDDL(%v)", tt.statement)) {
 				return
 			}
@@ -1200,6 +1322,35 @@ func countOccurrences(s []string, v string) int {
 	return c
 }
 
+func Test_tokenize(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want []string
+	}{
+		{
+			name: "simple",
+			s:    "CREATE TABLE Singers ( SingerId INT64 ) PRIMARY KEY ( SingerId )",
+			want: []string{"CREATE", "TABLE", "Singers", "SingerId", "INT64", "PRIMARY", "KEY", "SingerId"},
+		},
+		{
+			name: "escaped single quote",
+			s:    "CREATE TABLE 'H''S' ( SingerId INT64 )",
+			want: []string{"CREATE", "TABLE", "'H''S'", "SingerId", "INT64"},
+		},
+		{
+			name: "escaped double quote",
+			s:    "CREATE TABLE \"H\"\"S\" ( SingerId INT64 )",
+			want: []string{"CREATE", "TABLE", "\"H\"\"S\"", "SingerId", "INT64"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, tokenize(tt.s), "tokenize(%v)", tt.s)
+		})
+	}
+}
+
 func newFile(t *testing.T, dir, fileName string, content []byte) {
 	file, err := os.Create(filepath.Join(dir, fileName))
 	require.NoError(t, err)
@@ -1207,660 +1358,4 @@ func newFile(t *testing.T, dir, fileName string, content []byte) {
 
 	_, err = file.Write(content)
 	require.NoError(t, err)
-}
-
-func TestHasOutOfOrderMigrations(t *testing.T) {
-	tests := []struct {
-		name       string
-		migrations Migrations
-		applied    map[int64]bool
-		outOfOrder bool
-	}{
-		{
-			name: "all migrations applied",
-			migrations: Migrations{
-				{Version: 1},
-				{Version: 2},
-				{Version: 3},
-			},
-			applied: map[int64]bool{
-				1: true,
-				2: true,
-				3: true,
-			},
-			outOfOrder: false,
-		},
-		{
-			name: "contiguous unapplied from current version",
-			migrations: Migrations{
-				{Version: 1},
-				{Version: 2},
-				{Version: 3},
-				{Version: 4},
-				{Version: 5},
-			},
-			applied: map[int64]bool{
-				1: true,
-				2: true,
-			},
-			outOfOrder: false,
-		},
-		{
-			name: "all unapplied from beginning",
-			migrations: Migrations{
-				{Version: 1},
-				{Version: 2},
-				{Version: 3},
-			},
-			applied:    map[int64]bool{},
-			outOfOrder: false,
-		},
-		{
-			name: "out of order - applied migration in middle",
-			migrations: Migrations{
-				{Version: 1},
-				{Version: 2},
-				{Version: 3},
-				{Version: 4},
-				{Version: 5},
-			},
-			applied: map[int64]bool{
-				1: true,
-				3: true, // 3 is applied but 2 is not
-			},
-			outOfOrder: true,
-		},
-		{
-			name: "non-sequential version numbers but contiguous applied",
-			migrations: Migrations{
-				{Version: 10},
-				{Version: 20},
-				{Version: 30},
-				{Version: 40},
-			},
-			applied: map[int64]bool{
-				10: true,
-				20: true,
-			},
-			outOfOrder: false, // 30 and 40 are not contiguous from 20
-		},
-		{
-			name: "non-sequential version numbers but contiguous applied",
-			migrations: Migrations{
-				{Version: 10},
-				{Version: 11},
-				{Version: 20},
-			},
-			applied: map[int64]bool{
-				10: true,
-				20: true,
-			},
-			outOfOrder: true, // 11 is not applied and is out of order
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := hasOutOfOrderMigrations(tt.migrations, tt.applied)
-			assert.Equal(t, tt.outOfOrder, got, "hasOutOfOrderMigrations() = %v, want %v", got, tt.outOfOrder)
-		})
-	}
-}
-
-func TestGroupMigrationsByType(t *testing.T) {
-	tests := []struct {
-		name       string
-		migrations Migrations
-		applied    map[int64]bool
-		limit      int
-		want       []migrationBatch
-	}{
-		{
-			name: "all same type DDL",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDDL},
-				{Version: 2, Kind: StatementKindDDL},
-				{Version: 3, Kind: StatementKindDDL},
-			},
-			applied: map[int64]bool{},
-			limit:   -1,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 1, Kind: StatementKindDDL},
-						{Version: 2, Kind: StatementKindDDL},
-						{Version: 3, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-			},
-		},
-		{
-			name: "mixed DDL and DML types",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDDL},
-				{Version: 2, Kind: StatementKindDDL},
-				{Version: 3, Kind: StatementKindDML},
-				{Version: 4, Kind: StatementKindDML},
-				{Version: 5, Kind: StatementKindDDL},
-			},
-			applied: map[int64]bool{},
-			limit:   -1,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 1, Kind: StatementKindDDL},
-						{Version: 2, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 3, Kind: StatementKindDML},
-						{Version: 4, Kind: StatementKindDML},
-					},
-					kind: StatementKindDML,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 5, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-			},
-		},
-		{
-			name: "skip applied migrations",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDDL},
-				{Version: 2, Kind: StatementKindDDL},
-				{Version: 3, Kind: StatementKindDDL},
-				{Version: 4, Kind: StatementKindDDL},
-			},
-			applied: map[int64]bool{
-				1: true,
-				2: true,
-			},
-			limit: -1,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 3, Kind: StatementKindDDL},
-						{Version: 4, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-			},
-		},
-		{
-			name: "applied migration breaks batch",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDDL},
-				{Version: 2, Kind: StatementKindDDL},
-				{Version: 3, Kind: StatementKindDDL},
-				{Version: 4, Kind: StatementKindDDL},
-				{Version: 5, Kind: StatementKindDDL},
-			},
-			applied: map[int64]bool{
-				3: true,
-			},
-			limit: -1,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 1, Kind: StatementKindDDL},
-						{Version: 2, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 4, Kind: StatementKindDDL},
-						{Version: 5, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-			},
-		},
-		{
-			name: "respect limit",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDDL},
-				{Version: 2, Kind: StatementKindDDL},
-				{Version: 3, Kind: StatementKindDDL},
-				{Version: 4, Kind: StatementKindDDL},
-				{Version: 5, Kind: StatementKindDDL},
-			},
-			applied: map[int64]bool{},
-			limit:   3,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 1, Kind: StatementKindDDL},
-						{Version: 2, Kind: StatementKindDDL},
-						{Version: 3, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-			},
-		},
-		{
-			name: "directive overrides kind",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDML, Directives: MigrationDirectives{StatementKind: StatementKindPartitionedDML}},
-				{Version: 2, Kind: StatementKindDML, Directives: MigrationDirectives{StatementKind: StatementKindPartitionedDML}},
-				{Version: 3, Kind: StatementKindDML},
-			},
-			applied: map[int64]bool{},
-			limit:   -1,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 1, Kind: StatementKindDML, Directives: MigrationDirectives{StatementKind: StatementKindPartitionedDML}},
-						{Version: 2, Kind: StatementKindDML, Directives: MigrationDirectives{StatementKind: StatementKindPartitionedDML}},
-					},
-					kind: StatementKindPartitionedDML,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 3, Kind: StatementKindDML},
-					},
-					kind: StatementKindDML,
-				},
-			},
-		},
-		{
-			name: "all migrations applied",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDDL},
-				{Version: 2, Kind: StatementKindDDL},
-			},
-			applied: map[int64]bool{
-				1: true,
-				2: true,
-			},
-			limit: -1,
-			want:  []migrationBatch{},
-		},
-		{
-			name: "alternating types create multiple batches",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDDL},
-				{Version: 2, Kind: StatementKindDML},
-				{Version: 3, Kind: StatementKindDDL},
-				{Version: 4, Kind: StatementKindDML},
-			},
-			applied: map[int64]bool{},
-			limit:   -1,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 1, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 2, Kind: StatementKindDML},
-					},
-					kind: StatementKindDML,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 3, Kind: StatementKindDDL},
-					},
-					kind: StatementKindDDL,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 4, Kind: StatementKindDML},
-					},
-					kind: StatementKindDML,
-				},
-			},
-		},
-		{
-			name: "partitioned DML separate from DML",
-			migrations: Migrations{
-				{Version: 1, Kind: StatementKindDML},
-				{Version: 2, Kind: StatementKindPartitionedDML},
-				{Version: 3, Kind: StatementKindPartitionedDML},
-				{Version: 4, Kind: StatementKindDML},
-			},
-			applied: map[int64]bool{},
-			limit:   -1,
-			want: []migrationBatch{
-				{
-					migrations: []*Migration{
-						{Version: 1, Kind: StatementKindDML},
-					},
-					kind: StatementKindDML,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 2, Kind: StatementKindPartitionedDML},
-						{Version: 3, Kind: StatementKindPartitionedDML},
-					},
-					kind: StatementKindPartitionedDML,
-				},
-				{
-					migrations: []*Migration{
-						{Version: 4, Kind: StatementKindDML},
-					},
-					kind: StatementKindDML,
-				},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := groupMigrationsByType(tt.migrations, tt.applied, tt.limit)
-
-			// Compare batch count
-			require.Equal(t, len(tt.want), len(got), "number of batches mismatch")
-
-			// Compare each batch
-			for i := range tt.want {
-				assert.Equal(t, tt.want[i].kind, got[i].kind, "batch %d kind mismatch", i)
-				require.Equal(t, len(tt.want[i].migrations), len(got[i].migrations), "batch %d migration count mismatch", i)
-
-				for j := range tt.want[i].migrations {
-					assert.Equal(t, tt.want[i].migrations[j].Version, got[i].migrations[j].Version,
-						"batch %d migration %d version mismatch", i, j)
-					assert.Equal(t, tt.want[i].migrations[j].Kind, got[i].migrations[j].Kind,
-						"batch %d migration %d kind mismatch", i, j)
-				}
-			}
-		})
-	}
-}
-
-func TestExecuteFFMigrations(t *testing.T) {
-	ctx := context.Background()
-
-	client, done := testClientWithDatabase(t, ctx)
-	defer done()
-
-	migrations, err := LoadMigrations("testdata/migrations", nil, false, PlaceholderOptions{})
-	if err != nil {
-		t.Fatalf("failed to load migrations: %v", err)
-	}
-
-	// Apply first migration normally to set up a baseline
-	if _, err = client.ExecuteMigrations(ctx, migrations[:1], 1, migrationTable, 1, nil, false); err != nil {
-		t.Fatalf("failed to execute initial migration: %v", err)
-	}
-
-	// Ensure first migration was applied
-	ensureMigrationVersionRecord(t, ctx, client, 2, false)
-	ensureMigrationHistoryRecord(t, ctx, client, 2, false)
-
-	// Get current version
-	currentVersion, _, err := client.GetSchemaMigrationVersion(ctx, migrationTable)
-	if err != nil {
-		t.Fatalf("failed to get current version: %v", err)
-	}
-
-	// Now apply remaining migrations with fast-forward mode
-	history, err := client.GetMigrationHistory(ctx, migrationTable)
-	if err != nil {
-		t.Fatalf("failed to get migration history: %v", err)
-	}
-
-	applied := make(map[int64]bool)
-	for i := range history {
-		applied[history[i].Version] = true
-	}
-
-	// Insert test data for partitioned DML migration
-	_, err = client.spannerClient.Apply(
-		ctx,
-		[]*spanner.Mutation{
-			spanner.Insert(singerTable, []string{"SingerID", "FirstName"}, []interface{}{"1", "foo"}),
-		},
-	)
-	if err != nil {
-		t.Fatalf("failed to apply mutation: %v", err)
-	}
-
-	// Execute remaining migrations with fast-forward
-	migrationsOutput, err := client.executeFFMigrations(ctx, migrations, -1, migrationTable, 1, nil, applied, currentVersion)
-	if err != nil {
-		t.Fatalf("failed to execute ff migrations: %v", err)
-	}
-
-	// Verify migrations were applied
-	ensureMigrationColumn(t, ctx, client, "LastName", "STRING(MAX)", "NO")
-	ensureMigrationVersionRecord(t, ctx, client, 5, false)
-	ensureMigrationHistoryRecord(t, ctx, client, 5, false)
-
-	// Verify DML migration output
-	if want, got := int64(1), migrationsOutput["000003.sql"].RowsAffected; want != got {
-		t.Errorf("migration %q: want %d rows affected, but got %d", "000003.sql", want, got)
-	}
-
-	if want, got := int64(4), migrationsOutput["000005.sql"].RowsAffected; want != got {
-		t.Errorf("migration %q: want %d rows affected, but got %d", "000005.sql", want, got)
-	}
-}
-
-func TestExecuteFFMigrations_OutOfOrder(t *testing.T) {
-	ctx := context.Background()
-
-	client, done := testClientWithDatabase(t, ctx)
-	defer done()
-
-	migrations, err := LoadMigrations("testdata/migrations", nil, false, PlaceholderOptions{})
-	if err != nil {
-		t.Fatalf("failed to load migrations: %v", err)
-	}
-
-	// Apply first and third migrations, skipping second
-	if _, err = client.ExecuteMigrations(ctx, migrations[:1], 1, migrationTable, 1, nil, false); err != nil {
-		t.Fatalf("failed to execute migration 1: %v", err)
-	}
-
-	// Manually mark migration 4 as applied, skipping migration 3
-	if err := client.setSchemaMigrationVersion(ctx, 4, true, migrationTable); err != nil {
-		t.Fatalf("failed to set version 4 dirty: %v", err)
-	}
-	if err := client.setSchemaMigrationVersion(ctx, 4, false, migrationTable); err != nil {
-		t.Fatalf("failed to set version 4 clean: %v", err)
-	}
-
-	history, err := client.GetMigrationHistory(ctx, migrationTable)
-	if err != nil {
-		t.Fatalf("failed to get migration history: %v", err)
-	}
-
-	applied := make(map[int64]bool)
-	for i := range history {
-		applied[history[i].Version] = true
-	}
-
-	// Current version is 4 (last applied), but migration 3 (version 3) is not applied
-	// So unapplied migrations are: 3, 5 - but 3 < currentVersion, so this should fail
-	currentVersion := uint(4)
-
-	// Try to execute with fast-forward - should fail because migration 3 is not applied but is before current
-	_, err = client.executeFFMigrations(ctx, migrations, -1, migrationTable, 1, nil, applied, currentVersion)
-	if err == nil {
-		t.Fatal("expected error for out-of-order migrations, got nil")
-	}
-
-	// Verify error message contains expected text
-	expectedMsg := "out-of-order or backfill migrations detected"
-	if !strings.Contains(err.Error(), expectedMsg) {
-		t.Errorf("expected error to contain %q, got: %v", expectedMsg, err)
-	}
-}
-
-func TestExecuteFFMigrations_WithLimit(t *testing.T) {
-	ctx := context.Background()
-
-	client, done := testClientWithDatabase(t, ctx)
-	defer done()
-
-	migrations, err := LoadMigrations("testdata/migrations", nil, false, PlaceholderOptions{})
-	if err != nil {
-		t.Fatalf("failed to load migrations: %v", err)
-	}
-
-	// Apply first migration normally to establish current version
-	if _, err = client.ExecuteMigrations(ctx, migrations[:1], 1, migrationTable, 1, nil, false); err != nil {
-		t.Fatalf("failed to execute initial migration: %v", err)
-	}
-
-	currentVersion, _, err := client.GetSchemaMigrationVersion(ctx, migrationTable)
-	if err != nil {
-		t.Fatalf("failed to get current version: %v", err)
-	}
-
-	history, err := client.GetMigrationHistory(ctx, migrationTable)
-	if err != nil {
-		t.Fatalf("failed to get migration history: %v", err)
-	}
-
-	applied := make(map[int64]bool)
-	for i := range history {
-		applied[history[i].Version] = true
-	}
-
-	// Apply only 2 more migrations with limit (migrations 2 and 3 from remaining list)
-	_, err = client.executeFFMigrations(ctx, migrations, 2, migrationTable, 1, nil, applied, currentVersion)
-	if err != nil {
-		t.Fatalf("failed to execute ff migrations with limit: %v", err)
-	}
-
-	// Verify only 3 total migrations were applied (1 initial + 2 with limit)
-	version, _, err := client.GetSchemaMigrationVersion(ctx, migrationTable)
-	if err != nil {
-		t.Fatalf("failed to get version: %v", err)
-	}
-
-	if version != 4 {
-		t.Errorf("expected version 4, got %d", version)
-	}
-
-	// Verify history has exactly 3 entries
-	history, err = client.GetMigrationHistory(ctx, migrationTable)
-	if err != nil {
-		t.Fatalf("failed to get history: %v", err)
-	}
-
-	if len(history) != 3 {
-		t.Errorf("expected 3 history records, got %d", len(history))
-	}
-}
-
-func TestMigrationBatch_Statements(t *testing.T) {
-	tests := []struct {
-		name  string
-		batch migrationBatch
-		want  []string
-	}{
-		{
-			name: "single migration single statement",
-			batch: migrationBatch{
-				migrations: []*Migration{
-					{Version: 1, Statements: []string{"CREATE TABLE foo"}},
-				},
-			},
-			want: []string{"CREATE TABLE foo"},
-		},
-		{
-			name: "single migration multiple statements",
-			batch: migrationBatch{
-				migrations: []*Migration{
-					{Version: 1, Statements: []string{"CREATE TABLE foo", "CREATE TABLE bar"}},
-				},
-			},
-			want: []string{"CREATE TABLE foo", "CREATE TABLE bar"},
-		},
-		{
-			name: "multiple migrations aggregated",
-			batch: migrationBatch{
-				migrations: []*Migration{
-					{Version: 1, Statements: []string{"CREATE TABLE foo"}},
-					{Version: 2, Statements: []string{"CREATE TABLE bar", "CREATE INDEX idx"}},
-					{Version: 3, Statements: []string{"ALTER TABLE foo ADD COLUMN baz INT64"}},
-				},
-			},
-			want: []string{
-				"CREATE TABLE foo",
-				"CREATE TABLE bar",
-				"CREATE INDEX idx",
-				"ALTER TABLE foo ADD COLUMN baz INT64",
-			},
-		},
-		{
-			name: "empty batch",
-			batch: migrationBatch{
-				migrations: []*Migration{},
-			},
-			want: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.batch.statements()
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestMigrationBatch_Versions(t *testing.T) {
-	tests := []struct {
-		name  string
-		batch migrationBatch
-		want  []uint
-	}{
-		{
-			name: "single version",
-			batch: migrationBatch{
-				migrations: []*Migration{
-					{Version: 1},
-				},
-			},
-			want: []uint{1},
-		},
-		{
-			name: "multiple versions",
-			batch: migrationBatch{
-				migrations: []*Migration{
-					{Version: 1},
-					{Version: 2},
-					{Version: 3},
-				},
-			},
-			want: []uint{1, 2, 3},
-		},
-		{
-			name: "non-sequential versions",
-			batch: migrationBatch{
-				migrations: []*Migration{
-					{Version: 10},
-					{Version: 20},
-					{Version: 30},
-				},
-			},
-			want: []uint{10, 20, 30},
-		},
-		{
-			name: "empty batch",
-			batch: migrationBatch{
-				migrations: []*Migration{},
-			},
-			want: []uint{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.batch.versions()
-			assert.Equal(t, tt.want, got)
-		})
-	}
 }

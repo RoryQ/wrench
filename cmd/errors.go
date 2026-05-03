@@ -31,7 +31,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return fmt.Sprintf("Error command: %s, version: %s", e.cmd.Name(), Version)
+	return fmt.Sprintf("Error command: %s, version: %s: %v", e.cmd.Name(), Version, e.err)
 }
 
 func (e *Error) Unwrap() error {

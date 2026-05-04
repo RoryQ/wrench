@@ -60,7 +60,39 @@ const (
 	ExistingMigrationsUpgradeStarted   = UpgradeStatus("Started")
 	ExistingMigrationsUpgradeCompleted = UpgradeStatus("Completed")
 	createUpgradeIndicatorFormatString = `CREATE TABLE %s (Dummy INT64 NOT NULL) PRIMARY KEY(Dummy)`
+
+	ObjectTypeTable         = "table"
+	ObjectTypeView          = "view"
+	ObjectTypeIndex         = "index"
+	ObjectTypeModel         = "model"
+	ObjectTypeChangeStream  = "change_stream"
+	ObjectTypeSequence      = "sequence"
+	ObjectTypeDatabaseRole  = "database_role"
+	ObjectTypeSearchIndex   = "search_index"
+	ObjectTypePropertyGraph = "property_graph"
+	ObjectTypeFunction      = "function"
+	ObjectTypeSchema        = "schema"
+	ObjectTypePlacement     = "placement"
+	ObjectTypeProtoBundle   = "proto_bundle"
+	ObjectTypeSynonym       = "synonym"
 )
+
+var AllObjectTypes = []string{
+	ObjectTypeTable,
+	ObjectTypeView,
+	ObjectTypeIndex,
+	ObjectTypeModel,
+	ObjectTypeChangeStream,
+	ObjectTypeSequence,
+	ObjectTypeDatabaseRole,
+	ObjectTypeSearchIndex,
+	ObjectTypePropertyGraph,
+	ObjectTypeFunction,
+	ObjectTypeSchema,
+	ObjectTypePlacement,
+	ObjectTypeProtoBundle,
+	ObjectTypeSynonym,
+}
 
 var (
 	createUpgradeIndicatorSql = fmt.Sprintf(createUpgradeIndicatorFormatString, upgradeIndicator)
@@ -228,7 +260,7 @@ func parseDDL(statement string) (ddl SchemaDDL, err error) {
 	objectType := strings.ToLower(matches["ObjectType"])
 	// put all indexes in the same group
 	if strings.HasSuffix(objectType, "index") {
-		objectType = "index"
+		objectType = ObjectTypeIndex
 	}
 
 	ddl = SchemaDDL{

@@ -42,6 +42,7 @@ var (
 	instance                  string
 	database                  string
 	directory                 string
+	outputDir                 string
 	schemaFile                string
 	credentialsFile           string
 	staticDataTablesFile      string
@@ -84,6 +85,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&instance, flagNameInstance, spannerInstanceID(), "Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)")
 	rootCmd.PersistentFlags().StringVar(&database, flagNameDatabase, spannerDatabaseID(), "Cloud Spanner database name (optional. if not set, will use $SPANNER_DATABASE_ID value)")
 	rootCmd.PersistentFlags().StringVar(&directory, flagNameDirectory, "", "Directory that schema file placed (required)")
+	rootCmd.PersistentFlags().StringVar(&outputDir, flagNameOutputDir, "", "Output directory for schema files. Falls back to --directory if not set.")
 	rootCmd.PersistentFlags().StringVar(&schemaFile, flagNameSchemaFile, "", "Name of schema file (optional. if not set, will use default 'schema.sql' file name)")
 	rootCmd.PersistentFlags().StringVar(&credentialsFile, flagCredentialsFile, "", "Specify Credentials File")
 	rootCmd.PersistentFlags().StringVar(&staticDataTablesFile, flagStaticDataTablesFile, "", "File containing list of static data tables to track (optional)")

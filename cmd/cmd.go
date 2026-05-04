@@ -33,6 +33,7 @@ const (
 	flagNameInstance              = "instance"
 	flagNameDatabase              = "database"
 	flagNameDirectory             = "directory"
+	flagNameOutputDir             = "output-dir"
 	flagSkipVersions              = "skip-versions"
 	flagNameCreateNoPrompt        = "no-prompt"
 	flagCredentialsFile           = "credentials-file"
@@ -73,6 +74,14 @@ func newSpannerClient(ctx context.Context, c *cobra.Command) (*spanner.Client, e
 	}
 
 	return client, nil
+}
+
+func outputDirPath(c *cobra.Command) string {
+	outDir := c.Flag(flagNameOutputDir).Value.String()
+	if outDir != "" {
+		return outDir
+	}
+	return c.Flag(flagNameDirectory).Value.String()
 }
 
 func schemaFilePath(c *cobra.Command) string {

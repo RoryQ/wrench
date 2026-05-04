@@ -42,7 +42,6 @@ func RowToInsertStatement(tableName string, row *spanner.Row) (string, error) {
 		tableName,
 		strings.Join(columns.Names, ", "),
 		strings.Join(columns.FormattedValues, ", ")), nil
-
 }
 
 func RowToColumns(row *spanner.Row) (Columns, error) {

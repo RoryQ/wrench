@@ -2,11 +2,12 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/spf13/pflag"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/ory/dockertest/v3"
 	"github.com/ory/dockertest/v3/docker"

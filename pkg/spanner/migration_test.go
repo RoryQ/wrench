@@ -34,13 +34,11 @@ const (
 	TestStmtNonPartitionedDML = "DELETE FROM Singers WHERE SingerId NOT IN (SELECT SingerId FROM Concerts)"
 )
 
-var (
-	TestPlaceholders = map[string]string{
-		"PROJECT_ID":  "projectID134",
-		"INSTANCE_ID": "instanceID456",
-		"DATABASE_ID": "databaseID789",
-	}
-)
+var TestPlaceholders = map[string]string{
+	"PROJECT_ID":  "projectID134",
+	"INSTANCE_ID": "instanceID456",
+	"DATABASE_ID": "databaseID789",
+}
 
 func TestLoadMigrations(t *testing.T) {
 	ms, err := LoadMigrations(filepath.Join("testdata", "migrations"), nil, false, PlaceholderOptions{})
@@ -935,7 +933,8 @@ SELECT 1 FROM Foo
 /* this is not preamble */`,
 			want: `block 1
 block 2
-block 3`},
+block 3`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

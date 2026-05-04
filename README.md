@@ -93,6 +93,7 @@ Flags:
   -h, --help                                 help for wrench
       --instance string                      Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)
       --lock-identifier string               Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated) (default "58a4394a-19f9-4dbf-880d-20b6cf169d46")
+      --output-dir string                    Output directory for schema files. Falls back to --directory if not set.
       --partitioned-dml-concurrency uint16   Set the concurrency for Partitioned-DML statements. (optional. if not set, will use $WRENCH_PARTITIONED_DML_CONCURRENCY or default to 1) (default 1)
       --project string                       GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)
       --schema-file string                   Name of schema file (optional. if not set, will use default 'schema.sql' file name)

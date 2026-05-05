@@ -1011,6 +1011,42 @@ func Test_parseDDL(t *testing.T) {
 			},
 		},
 		{
+			name: "CREATE SEQUENCE",
+			args: args{"CREATE SEQUENCE MySequence OPTIONS (sequence_kind='bit_reversed_positive')"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE SEQUENCE MySequence OPTIONS (sequence_kind='bit_reversed_positive')",
+				Filename:   "mysequence.sql",
+				ObjectType: "sequence",
+			},
+		},
+		{
+			name: "CREATE SEARCH INDEX",
+			args: args{"CREATE SEARCH INDEX MySearchIndex ON MyTable(Col) RETAIN 7 DAYS"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE SEARCH INDEX MySearchIndex ON MyTable(Col) RETAIN 7 DAYS",
+				Filename:   "mysearchindex.sql",
+				ObjectType: "search_index",
+			},
+		},
+		{
+			name: "CREATE PROPERTY GRAPH",
+			args: args{"CREATE PROPERTY GRAPH MyGraph NODE TABLES (Singers)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE PROPERTY GRAPH MyGraph NODE TABLES (Singers)",
+				Filename:   "mygraph.sql",
+				ObjectType: "property_graph",
+			},
+		},
+		{
+			name: "CREATE ROLE",
+			args: args{"CREATE ROLE MyRole"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE ROLE MyRole",
+				Filename:   "myrole.sql",
+				ObjectType: "database_role",
+			},
+		},
+		{
 			name:    "Empty statement",
 			args:    args{""},
 			wantErr: true,

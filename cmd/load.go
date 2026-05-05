@@ -35,9 +35,9 @@ import (
 )
 
 const (
-	dirTable      = "table"
+	dirTable      = spanner.ObjectTypeTable
 	dirStaticData = "static_data"
-	dirIndex      = "index"
+	dirIndex      = spanner.ObjectTypeIndex
 )
 
 type staticDataConfig struct {

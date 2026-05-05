@@ -1,0 +1,1 @@
+CREATE CHANGE STREAM MyStream FOR Singers;

@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/spf13/pflag"
 
@@ -29,7 +33,9 @@ func init() {
 	schemaCmd.Flags().String(flagSpannerEmulatorImage, "roryq/spanner-emulator:latest", "Spanner emulator image to use. Override this to pin version or change registry.")
 
 	// copy migrate up flags
-	schemaCmd.Flags().AddFlagSet(findCommand("up").LocalFlags())
+	if up := findCommand("up"); up != nil {
+		schemaCmd.Flags().AddFlagSet(up.LocalFlags())
+	}
 }
 
 func findCommand(name string) *cobra.Command {
@@ -52,6 +58,21 @@ func schema(c *cobra.Command, args []string) error {
 	_, err := runSpannerEmulator(f.Value.String(), projectId, instanceId, databaseId)
 	if err != nil {
 		return err
+	}
+
+	// create database
+	{
+		client, err := newSpannerClient(context.Background(), c)
+		if err != nil {
+			return err
+		}
+		if err := client.CreateDatabase(context.Background(), nil, nil); err != nil {
+			if status.Code(err) != codes.AlreadyExists {
+				_ = client.Close()
+				return err
+			}
+		}
+		_ = client.Close()
 	}
 
 	// run migrations

@@ -378,6 +378,78 @@ func Test_migrationFileRegex(t *testing.T) {
 	}
 }
 
+func Test_toStatements(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		want []string
+	}{
+		{
+			name: "simple statements",
+			file: "CREATE TABLE T1 (C1 INT64) PRIMARY KEY (C1); CREATE TABLE T2 (C2 INT64) PRIMARY KEY (C2);",
+			want: []string{"CREATE TABLE T1 (C1 INT64) PRIMARY KEY (C1)", "CREATE TABLE T2 (C2 INT64) PRIMARY KEY (C2)"},
+		},
+		{
+			name: "semicolon in string literal",
+			file: "INSERT INTO T1 (C1) VALUES (';'); SELECT * FROM T1;",
+			want: []string{"INSERT INTO T1 (C1) VALUES (';')", "SELECT * FROM T1"},
+		},
+		{
+			name: "semicolon in comment",
+			file: "SELECT 1; -- comment with ;\nSELECT 2;",
+			want: []string{"SELECT 1", "SELECT 2"},
+		},
+		{
+			name: "semicolon in triple-quoted string",
+			file: "SELECT ''';'''; SELECT 2;",
+			want: []string{"SELECT ''';'''", "SELECT 2"},
+		},
+		{
+			name: "mixed comments and literals",
+			file: `
+INSERT INTO T1 (C1) VALUES (';');
+/* multi-line
+   comment with ; */
+SELECT * FROM T1; # another comment ;
+`,
+			want: []string{"INSERT INTO T1 (C1) VALUES (';')", "SELECT * FROM T1"},
+		},
+		{
+			name: "escaped single quote in literal followed by semicolon",
+			file: "INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER ; PLUS LOAN'); SELECT 1;",
+			want: []string{"INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER ; PLUS LOAN')", "SELECT 1"},
+		},
+		{
+			name: "consecutive escaped single quotes",
+			file: "SELECT 'A''''B'; SELECT 1;",
+			want: []string{"SELECT 'A''''B'", "SELECT 1"},
+		},
+		{
+			name: "large DML migration with escaped quotes",
+			file: `
+INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER');
+INSERT INTO T1 (C1) VALUES ('ANOTHER '' VALUE');
+UPDATE T1 SET C1 = 'O''REILLY' WHERE C1 = 'REILLY';
+`,
+			want: []string{
+				"INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER')",
+				"INSERT INTO T1 (C1) VALUES ('ANOTHER '' VALUE')",
+				"UPDATE T1 SET C1 = 'O''REILLY' WHERE C1 = 'REILLY'",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := toStatements([]byte(tt.file))
+			if err != nil {
+				t.Errorf("toStatements() error = %v", err)
+				return
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestRemoveCommentsAndTrim(t *testing.T) {
 	tests := []struct {
 		input   string
@@ -707,6 +779,14 @@ SELECT 1`,
 			input: `/** This is a javadoc style comment /** this is still a comment **/
 SELECT 1`,
 			want: `SELECT 1`,
+		},
+		{
+			input: `INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER PLUS LOAN');`,
+			want:  `INSERT INTO T1 (C1) VALUES ('DIRECT H''SAVER PLUS LOAN')`,
+		},
+		{
+			input: `SELECT "A""B";`,
+			want:  `SELECT "A""B"`,
 		},
 	}
 	for _, tc := range tests {

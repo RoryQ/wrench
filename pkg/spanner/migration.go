@@ -20,7 +20,6 @@
 package spanner
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -35,10 +34,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/roryq/wrench/pkg/xregexp"
-)
-
-const (
-	statementsSeparator = ";"
 )
 
 var (
@@ -209,19 +204,141 @@ func LoadMigrations(dir string, toSkipSlice []uint, detectPartitionedDML bool, p
 	return migrations, nil
 }
 
+// toStatements parses a migration file into a slice of statements by splitting
+// on semicolons while respecting quotes and comments.
+//
+// The state machine logic is adapted from removeCommentsAndTrim, which is
+// lifted directly from googleapis/go-sql-spanner.
+// https://github.com/googleapis/go-sql-spanner/blob/076c63111370017133f79dd37c0069f68f27d7df/statement_parser.go
 func toStatements(file []byte) ([]string, error) {
-	contents := bytes.Split(file, []byte(statementsSeparator))
+	const (
+		singleQuote = '\''
+		doubleQuote = '"'
+		backtick    = '`'
+		hyphen      = '-'
+		dash        = '#'
+		slash       = '/'
+		asterisk    = '*'
+		semicolon   = ';'
+	)
 
-	statements := make([]string, 0, len(contents))
-	for _, c := range contents {
-		statement, err := removeCommentsAndTrim(string(c))
-		if err != nil {
-			return nil, err
+	var statements []string
+	var currentStmt strings.Builder
+
+	isInQuoted := false
+	isInSingleLineComment := false
+	isInMultiLineComment := false
+	var startQuote rune
+	lastCharWasEscapeChar := false
+	isTripleQuoted := false
+
+	runes := []rune(string(file))
+	index := 0
+	for index < len(runes) {
+		c := runes[index]
+		if isInQuoted {
+			if (c == '\n' || c == '\r') && !isTripleQuoted {
+				return nil, spanner.ToSpannerError(status.Errorf(codes.InvalidArgument, "statement contains an unclosed literal: %s", string(file)))
+			} else if c == startQuote {
+				if lastCharWasEscapeChar {
+					lastCharWasEscapeChar = false
+				} else if isTripleQuoted {
+					if len(runes) > index+2 && runes[index+1] == startQuote && runes[index+2] == startQuote {
+						isInQuoted = false
+						startQuote = 0
+						isTripleQuoted = false
+						currentStmt.WriteRune(c)
+						currentStmt.WriteRune(c)
+						index += 2
+					}
+				} else if (startQuote == singleQuote || startQuote == doubleQuote) && len(runes) > index+1 && runes[index+1] == startQuote {
+					// escaped quote '' or ""
+					if isTripleQuoted {
+						// in triple quotes, we only care about the end marker
+					} else {
+						currentStmt.WriteRune(c)
+						c = runes[index+1]
+						index++
+					}
+				} else {
+					isInQuoted = false
+					startQuote = 0
+				}
+			} else if c == '\\' {
+				lastCharWasEscapeChar = true
+			} else {
+				lastCharWasEscapeChar = false
+			}
+			currentStmt.WriteRune(c)
+		} else {
+			// We are not in a quoted string.
+			if isInSingleLineComment {
+				if c == '\n' {
+					isInSingleLineComment = false
+				}
+				currentStmt.WriteRune(c)
+			} else if isInMultiLineComment {
+				if len(runes) > index+1 && c == asterisk && runes[index+1] == slash {
+					isInMultiLineComment = false
+					currentStmt.WriteRune(c)
+					currentStmt.WriteRune(runes[index+1])
+					index++
+				} else {
+					currentStmt.WriteRune(c)
+				}
+			} else {
+				if c == dash || (len(runes) > index+1 && c == hyphen && runes[index+1] == hyphen) {
+					// This is a single line comment.
+					isInSingleLineComment = true
+					currentStmt.WriteRune(c)
+				} else if len(runes) > index+1 && c == slash && runes[index+1] == asterisk {
+					isInMultiLineComment = true
+					currentStmt.WriteRune(c)
+					currentStmt.WriteRune(runes[index+1])
+					index++
+				} else if c == semicolon {
+					// End of statement
+					stmt, err := removeCommentsAndTrim(currentStmt.String())
+					if err != nil {
+						return nil, err
+					}
+					if stmt != "" {
+						statements = append(statements, stmt)
+					}
+					currentStmt.Reset()
+				} else {
+					if c == singleQuote || c == doubleQuote || c == backtick {
+						isInQuoted = true
+						startQuote = c
+						lastCharWasEscapeChar = false
+						// Check whether it is a triple-quote.
+						if len(runes) > index+2 && runes[index+1] == startQuote && runes[index+2] == startQuote {
+							isTripleQuoted = true
+							currentStmt.WriteRune(c)
+							currentStmt.WriteRune(c)
+							index += 2
+						}
+					}
+					currentStmt.WriteRune(c)
+				}
+			}
 		}
-		if statement != "" {
-			statements = append(statements, statement)
-		}
+		index++
 	}
+
+	if isInQuoted {
+		return nil, spanner.ToSpannerError(status.Errorf(codes.InvalidArgument, "statement contains an unclosed literal: %s", string(file)))
+	}
+
+	// Handle the last statement if it doesn't end with a semicolon
+	stmt, err := removeCommentsAndTrim(currentStmt.String())
+	if err != nil {
+		return nil, err
+	}
+	if stmt != "" {
+		statements = append(statements, stmt)
+	}
+
 	return statements, nil
 }
 
@@ -358,6 +475,15 @@ func removeCommentsAndTrim(sql string) (string, error) {
 						res.WriteRune(c)
 						index += 2
 					}
+				} else if (startQuote == singleQuote || startQuote == doubleQuote) && len(runes) > index+1 && runes[index+1] == startQuote {
+					// escaped quote '' or ""
+					if isTripleQuoted {
+						// in triple quotes, we only care about the end marker
+					} else {
+						res.WriteRune(c)
+						c = runes[index+1]
+						index++
+					}
 				} else {
 					isInQuoted = false
 					startQuote = 0
@@ -392,6 +518,7 @@ func removeCommentsAndTrim(sql string) (string, error) {
 					if c == singleQuote || c == doubleQuote || c == backtick {
 						isInQuoted = true
 						startQuote = c
+						lastCharWasEscapeChar = false
 						// Check whether it is a triple-quote.
 						if len(runes) > index+2 && runes[index+1] == startQuote && runes[index+2] == startQuote {
 							isTripleQuoted = true

@@ -258,6 +258,7 @@ func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, e
 		"SELECT SCHEMA_NAME as Name, 'schema' as Type FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS', '')",
 		"SELECT PLACEMENT_NAME as Name, 'placement' as Type FROM INFORMATION_SCHEMA.PLACEMENTS WHERE PLACEMENT_SCHEMA = ''",
 		"SELECT SYNONYM_NAME as Name, 'synonym' as Type FROM INFORMATION_SCHEMA.SYNONYMS WHERE SYNONYM_SCHEMA = ''",
+		"SELECT ROLE_NAME as Name, 'database_role' as Type FROM INFORMATION_SCHEMA.DATABASE_ROLES WHERE ROLE_NAME NOT IN ('public')",
 	}
 
 	for _, q := range append(queries, optionalQueries...) {
@@ -386,6 +387,11 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 				if j < len(tokens) {
 					objectName = tokens[j]
 				}
+			}
+		case "ROLE":
+			objectType = ObjectTypeDatabaseRole
+			if i+1 < len(tokens) {
+				objectName = tokens[i+1]
 			}
 		}
 		if objectName != "" {

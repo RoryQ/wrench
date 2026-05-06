@@ -1,10 +1,16 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/roryq/wrench/pkg/spanner"
 )
 
 func Test_readStaticDataTablesFile(t *testing.T) {
@@ -78,3 +84,44 @@ func Test_readStaticDataTablesFile(t *testing.T) {
 		})
 	}
 }
+
+func Test_writeDDL(t *testing.T) {
+	tempDir := t.TempDir()
+	tests := []struct {
+		name     string
+		ddl      spanner.SchemaDDL
+		expected string
+	}{
+		{
+			name: "table",
+			ddl: spanner.SchemaDDL{
+				Statement:  "CREATE TABLE Singers ( SingerId INT64 ) PRIMARY KEY ( SingerId )",
+				Filename:   "singers.sql",
+				ObjectType: "table",
+			},
+			expected: filepath.Join(tempDir, "table", "singers.sql"),
+		},
+		{
+			name: "function",
+			ddl: spanner.SchemaDDL{
+				Statement:  "CREATE OR REPLACE FUNCTION MyFunction() RETURNS INT64 AS (1)",
+				Filename:   "myfunction.sql",
+				ObjectType: "function",
+			},
+			expected: filepath.Join(tempDir, "function", "myfunction.sql"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := writeDDL(tt.ddl, tempDir)
+			require.NoError(t, err)
+
+			assert.FileExists(t, tt.expected)
+			content, err := os.ReadFile(tt.expected)
+			require.NoError(t, err)
+			assert.Equal(t, tt.ddl.Statement, string(content))
+		})
+	}
+}
+

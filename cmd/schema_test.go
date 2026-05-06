@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+
+	"github.com/roryq/wrench/pkg/spanner"
 )
 
 // Test_schema runs the schema command which requires docker
@@ -22,7 +24,6 @@ func Test_schema(t *testing.T) {
 	err := schema(cmd, []string{})
 	assert.NoError(t, err)
 
-	assert.DirExists(t, "testdata/schema_test/table")
 	assert.FileExists(t, "testdata/schema_test/schema.sql")
 
 	contentSchema, err := os.ReadFile("testdata/schema_test/schema.sql")
@@ -32,8 +33,20 @@ func Test_schema(t *testing.T) {
 
 	assert.Contains(t, string(contentSchema), string(contentMigration))
 
-	assert.DirExists(t, "testdata/schema_test/model")
-	assert.FileExists(t, "testdata/schema_test/model/custom_ai_model.sql")
+	// check all object types that should have been created
+	expectedFiles := []string{
+		filepath.Join(spanner.ObjectTypeTable, "singers.sql"),
+		filepath.Join(spanner.ObjectTypeModel, "custom_ai_model.sql"),
+		filepath.Join(spanner.ObjectTypeView, "singernames.sql"),
+		filepath.Join(spanner.ObjectTypeChangeStream, "mystream.sql"),
+		filepath.Join(spanner.ObjectTypeSequence, "mysequence.sql"),
+		filepath.Join(spanner.ObjectTypeIndex, "ix_singers_firstname.sql"),
+		filepath.Join(spanner.ObjectTypeFunction, "addone.sql"),
+		filepath.Join(spanner.ObjectTypeSchema, "my_schema.sql"),
+	}
+	for _, file := range expectedFiles {
+		assert.FileExists(t, filepath.Join("testdata/schema_test", file))
+	}
 
 	contentAIModelOutput, err := os.ReadFile("testdata/schema_test/model/custom_ai_model.sql")
 	assert.NoError(t, err)
@@ -42,11 +55,11 @@ func Test_schema(t *testing.T) {
 }
 
 func cleanup(t *testing.T) {
-	os.RemoveAll("testdata/schema_test/table")
-	os.RemoveAll("testdata/schema_test/schema.sql")
-	os.RemoveAll("testdata/schema_test/model")
-	require.NoDirExists(t, "testdata/schema_test/table")
-	require.NoFileExists(t, "testdata/schema_test/schema.sql")
-	require.NoDirExists(t, "testdata/schema_test/model")
-	require.NoFileExists(t, "testdata/schema_test/custom_ai_model.sql")
+	dir := "testdata/schema_test"
+	os.Remove(filepath.Join(dir, "schema.sql"))
+
+	// Use spanner.AllObjectTypes to clean up all potential directories
+	for _, target := range append([]string{"static_data"}, spanner.AllObjectTypes...) {
+		os.RemoveAll(filepath.Join(dir, target))
+	}
 }

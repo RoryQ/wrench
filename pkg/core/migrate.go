@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -33,9 +34,16 @@ func CreateMigrationFile(dir string, name string, opts ...MigrationSequenceOpt) 
 		return "", err
 	}
 
+	var versionedMigrations spanner.Migrations
+	for _, m := range ms {
+		if !m.IsRepeatable {
+			versionedMigrations = append(versionedMigrations, m)
+		}
+	}
+
 	var v uint = 1
-	if len(ms) > 0 {
-		v = roundNext(ms[len(ms)-1].Version, options.Interval)
+	if len(versionedMigrations) > 0 {
+		v = roundNext(versionedMigrations[len(versionedMigrations)-1].Version, options.Interval)
 	}
 
 	vStr := fmt.Sprintf("%0*d", options.ZeroPrefixLength, v)
@@ -83,6 +91,15 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		return err
 	}
 
+	var versionedMigrations, repeatableMigrations spanner.Migrations
+	for _, m := range migrations {
+		if m.IsRepeatable {
+			repeatableMigrations = append(repeatableMigrations, m)
+		} else {
+			versionedMigrations = append(versionedMigrations, m)
+		}
+	}
+
 	if err = client.EnsureMigrationTable(ctx, options.VersionTableName); err != nil {
 		return err
 	}
@@ -92,21 +109,36 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		return err
 	}
 
-	var migrationsOutput spanner.MigrationsOutput
+	migrationsOutput := make(spanner.MigrationsOutput)
 	switch status {
 	case spanner.ExistingMigrationsUpgradeStarted:
-		migrationsOutput, err = client.UpgradeExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName, options.ProtoDescriptors, options.FFMigrations)
+		output, err := client.UpgradeExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.ProtoDescriptors, options.FFMigrations)
 		if err != nil {
 			return err
 		}
+		maps.Copy(migrationsOutput, output)
 	case spanner.ExistingMigrationsUpgradeCompleted:
-		migrationsOutput, err = client.ExecuteMigrations(ctx, migrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors, options.FFMigrations)
+		output, err := client.ExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors, options.FFMigrations)
 		if err != nil {
 			return err
 		}
+		maps.Copy(migrationsOutput, output)
 	default:
 		return errors.New("migration in undetermined state")
 	}
+
+	if len(repeatableMigrations) > 0 {
+		repeatableTableName := spanner.RepeatableHistoryTableName(options.VersionTableName)
+		if err := client.EnsureRepeatableMigrationTable(ctx, repeatableTableName); err != nil {
+			return err
+		}
+		repeatableOutput, err := client.ExecuteRepeatableMigrations(ctx, repeatableMigrations, repeatableTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors)
+		if err != nil {
+			return err
+		}
+		maps.Copy(migrationsOutput, repeatableOutput)
+	}
+
 	if options.PrintRowsAffected {
 		fmt.Print(migrationsOutput.String())
 	}
@@ -147,6 +179,26 @@ func MigrateHistory(ctx context.Context, client *spanner.Client, opts ...Migrate
 		_, _ = fmt.Fprintf(writer, "%d\t%v\t%v\t%v\n", h.Version, h.Dirty, h.Created, h.Modified)
 	}
 	_ = writer.Flush()
+
+	repeatableHistory, err := client.GetRepeatableMigrationHistory(ctx, spanner.RepeatableHistoryTableName(options.VersionTableName))
+	if err != nil {
+		return err
+	}
+	if len(repeatableHistory) > 0 {
+		sort.SliceStable(repeatableHistory, func(i, j int) bool {
+			return repeatableHistory[i].AppliedAt.Before(repeatableHistory[j].AppliedAt)
+		})
+
+		_, _ = fmt.Fprintln(os.Stdout)
+		writer = tabwriter.NewWriter(os.Stdout, 0, 8, 1, '\t', tabwriter.AlignRight)
+		_, _ = fmt.Fprintln(writer, "Repeatable Name\tChecksum\tApplied At")
+		for i := range repeatableHistory {
+			h := repeatableHistory[i]
+			_, _ = fmt.Fprintf(writer, "%s\t%.8s\t%v\n", h.Name, h.Checksum, h.AppliedAt)
+		}
+		_ = writer.Flush()
+	}
+
 	return nil
 }
 

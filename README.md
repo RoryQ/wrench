@@ -15,10 +15,19 @@ This is a fork of https://github.com/cloudspannerecosystem/wrench with the follo
 - Repair dirty migrations. If a migration fails the version is marked as dirty. Any partial changes should be reverted manually and the history cleaned
 using `migrate repair`.
 
+- Repeatable Migrations. Migrations prefixed with `R__` (case-insensitive) followed by a name (e.g. `R__create_view.sql`) will be executed whenever their content changes (detected via checksum).
+  The name can contain alphanumeric characters, underscores and dashes.
+  They are executed after all versioned migrations have been applied.
+  **Note:** Repeatable migrations must be idempotent (e.g. `CREATE OR REPLACE VIEW`) as they may be re-executed multiple times and are not atomic with the history update.
+
+
 ## Onboarding existing databases to wrench
 
-This fork of wrench uses two additional tables for tracking migrations, `SchemaMigrationsHistory` for all scripts
-applied and `SchemaMigrationsLock` to limit wrench migrations to a single invocation.
+This fork of wrench uses three additional tables for tracking migrations:
+- `SchemaMigrationsHistory` for all versioned scripts applied.
+- `SchemaMigrationsRepeatableHistory` for tracking repeatable migrations and their checksums.
+- `SchemaMigrationsLock` to limit wrench migrations to a single invocation.
+
 If coming from a database managed by `golang-migrate` or the `cloudspannerecosystem/wrench` then you will already have a
 `SchemaMigrations` table and no work is needed. You can proceed to use this version of wrench and during the next migration
 it will detect that the `SchemaMigrationsHistory` table is missing, then create and backfill the "history" data.
@@ -31,7 +40,7 @@ If you have an existing database that is not controlled by any migration tools t
 databases but recreating for new databases.
 
 ### If you wish to go back to `golang-migrate` or `cloudspannerecosystem/wrench`
-You can simply drop the `SchemaMigrationsHistory` and `SchemaMigrationsLock` table as the `SchemaMigrations` will be in sync.
+You can simply drop the `SchemaMigrationsHistory`, `SchemaMigrationsRepeatableHistory` and `SchemaMigrationsLock` tables as the `SchemaMigrations` will be in sync.
 ___
 
 ## Installation

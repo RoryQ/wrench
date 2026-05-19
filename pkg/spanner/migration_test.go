@@ -397,6 +397,10 @@ func Test_repeatableMigrationRegex(t *testing.T) {
 			input:    "r__My-Name_123.sql",
 			expected: []string{"r__My-Name_123.sql", "My-Name_123"},
 		},
+		"GeneratedSuffix": {
+			input:    "R__000010_my-name.generated.sql",
+			expected: []string{"R__000010_my-name.generated.sql", "000010_my-name"},
+		},
 		"NoMatchVersioned": {
 			input:    "001_name.sql",
 			expected: nil,

@@ -46,8 +46,10 @@ var (
 	// 001_name.generated.sql
 	migrationFileRegex = regexp.MustCompile(`^([0-9]+)(?:_([a-zA-Z0-9_\-]+))?(?:[.]up|[.]generated)?\.sql$`)
 
-	// repeatableMigrationRegex matches patterns like R__name.sql
-	repeatableMigrationRegex = regexp.MustCompile(`(?i)^R__([a-zA-Z0-9_\-]+)\.sql$`)
+	// repeatableMigrationRegex matches the following patterns
+	// R__name.sql
+	// R__name.generated.sql
+	repeatableMigrationRegex = regexp.MustCompile(`(?i)^R__([a-zA-Z0-9_\-]+)(?:[.]generated)?\.sql$`)
 
 	MigrationNameRegex = regexp.MustCompile(`[a-zA-Z0-9_\-]+`)
 

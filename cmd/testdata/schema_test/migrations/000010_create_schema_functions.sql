@@ -1,0 +1,2 @@
+CREATE FUNCTION my_schema.AddTwo(x INT64) RETURNS INT64 AS (x + 2);
+CREATE FUNCTION my_schema.Multiply(x INT64, y INT64) RETURNS INT64 AS (x * y);

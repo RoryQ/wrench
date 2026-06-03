@@ -265,7 +265,7 @@ func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, e
 		"SELECT CHANGE_STREAM_NAME as Name, 'change_stream' as Type FROM INFORMATION_SCHEMA.CHANGE_STREAMS WHERE CHANGE_STREAM_SCHEMA = ''",
 		"SELECT SEQUENCE_NAME as Name, 'sequence' as Type FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = ''",
 		"SELECT MODEL_NAME as Name, 'model' as Type FROM INFORMATION_SCHEMA.MODELS WHERE MODEL_SCHEMA = ''",
-		"SELECT ROUTINE_NAME as Name, 'function' as Type FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = '' AND ROUTINE_TYPE = 'FUNCTION'",
+		"SELECT CASE WHEN ROUTINE_SCHEMA = '' THEN ROUTINE_NAME ELSE ROUTINE_SCHEMA || '.' || ROUTINE_NAME END as Name, 'function' as Type FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS') AND ROUTINE_TYPE = 'FUNCTION'",
 		"SELECT SCHEMA_NAME as Name, 'schema' as Type FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME NOT IN ('INFORMATION_SCHEMA', 'SPANNER_SYS', '')",
 		"SELECT PLACEMENT_NAME as Name, 'placement' as Type FROM INFORMATION_SCHEMA.PLACEMENTS WHERE PLACEMENT_SCHEMA = ''",
 		"SELECT SYNONYM_NAME as Name, 'synonym' as Type FROM INFORMATION_SCHEMA.SYNONYMS WHERE SYNONYM_SCHEMA = ''",
@@ -298,6 +298,20 @@ type SchemaDDL struct {
 	Statement  string
 	Filename   string
 	ObjectType string
+}
+
+// extractQualifiedName returns the object name at tokens[j], joining with tokens[j+1]
+// when the statement contains a schema-qualified name (e.g. my_schema.FunctionName).
+// The tokenizer splits on '.', so qualified names arrive as two consecutive tokens.
+func extractQualifiedName(tokens []string, j int, s string) string {
+	if j >= len(tokens) {
+		return ""
+	}
+	name := strings.Trim(tokens[j], "\"`'")
+	if j+1 < len(tokens) && strings.Contains(strings.ToLower(s), strings.ToLower(name)+".") {
+		name = name + "." + strings.Trim(tokens[j+1], "\"`'")
+	}
+	return name
 }
 
 func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err error) {
@@ -333,9 +347,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 					j += 3
 				}
 			}
-			if j < len(tokens) {
-				objectName = tokens[j]
-			}
+			objectName = extractQualifiedName(tokens, j, s)
 		case "DATABASE":
 			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "ROLE" {
 				objectType = ObjectTypeDatabaseRole
@@ -372,9 +384,7 @@ func parseDDL(statement string, objects map[string]string) (ddl SchemaDDL, err e
 					j += 3
 				}
 			}
-			if j < len(tokens) {
-				objectName = tokens[j]
-			}
+			objectName = extractQualifiedName(tokens, j, s)
 		case "CHANGE":
 			if i+1 < len(tokens) && strings.ToUpper(tokens[i+1]) == "STREAM" {
 				objectType = ObjectTypeChangeStream

@@ -1077,6 +1077,24 @@ func Test_parseDDL(t *testing.T) {
 			},
 		},
 		{
+			name: "CREATE FUNCTION schema-qualified",
+			args: args{"CREATE FUNCTION my_schema.AddTwo(x INT64) RETURNS INT64 AS (x * 2)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE FUNCTION my_schema.AddTwo(x INT64) RETURNS INT64 AS (x * 2)",
+				Filename:   "my_schema.addtwo.sql",
+				ObjectType: "function",
+			},
+		},
+		{
+			name: "CREATE FUNCTION schema-qualified with metadata",
+			args: args{"CREATE FUNCTION my_schema.Multiply(x INT64, y INT64) RETURNS INT64 AS (x * y)"},
+			wantDdl: SchemaDDL{
+				Statement:  "CREATE FUNCTION my_schema.Multiply(x INT64, y INT64) RETURNS INT64 AS (x * y)",
+				Filename:   "my_schema.multiply.sql",
+				ObjectType: "function",
+			},
+		},
+		{
 			name: "CREATE SCHEMA",
 			args: args{"CREATE SCHEMA my_schema"},
 			wantDdl: SchemaDDL{

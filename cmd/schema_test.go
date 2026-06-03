@@ -12,13 +12,16 @@ import (
 
 // Test_schema runs the schema command which requires docker
 func Test_schema(t *testing.T) {
-	// clean before and after
+	//clean before and after
 	t.Cleanup(func() { cleanup(t) })
 	cleanup(t)
 
 	// execute schema command
+	const definitionsDir = "testdata/schema_test/definitions"
+
 	cmd := schemaCmd
 	_ = cmd.Flag(flagNameDirectory).Value.Set("testdata/schema_test")
+	_ = cmd.Flag(flagNameOutputDir).Value.Set(definitionsDir)
 	_ = cmd.Flag(flagNameProject).Value.Set("test-project")
 	_ = cmd.Flag(flagNameInstance).Value.Set("my-instance")
 	err := schema(cmd, []string{})
@@ -42,13 +45,15 @@ func Test_schema(t *testing.T) {
 		filepath.Join(spanner.ObjectTypeSequence, "mysequence.sql"),
 		filepath.Join(spanner.ObjectTypeIndex, "ix_singers_firstname.sql"),
 		filepath.Join(spanner.ObjectTypeFunction, "addone.sql"),
+		filepath.Join(spanner.ObjectTypeFunction, "my_schema.addtwo.sql"),
+		filepath.Join(spanner.ObjectTypeFunction, "my_schema.multiply.sql"),
 		filepath.Join(spanner.ObjectTypeSchema, "my_schema.sql"),
 	}
 	for _, file := range expectedFiles {
-		assert.FileExists(t, filepath.Join("testdata/schema_test", file))
+		assert.FileExists(t, filepath.Join(definitionsDir, file))
 	}
 
-	contentAIModelOutput, err := os.ReadFile("testdata/schema_test/model/custom_ai_model.sql")
+	contentAIModelOutput, err := os.ReadFile(filepath.Join(definitionsDir, "model/custom_ai_model.sql"))
 	assert.NoError(t, err)
 	// replacements have been applied
 	assert.Contains(t, string(contentAIModelOutput), `endpoint = '//aiplatform.googleapis.com/projects/test-project/locations/us-central1/publishers/google/models/my-instance-database-model'`)
@@ -57,6 +62,7 @@ func Test_schema(t *testing.T) {
 func cleanup(t *testing.T) {
 	dir := "testdata/schema_test"
 	os.Remove(filepath.Join(dir, "schema.sql"))
+	os.RemoveAll(filepath.Join(dir, "definitions"))
 
 	// Use spanner.AllObjectTypes to clean up all potential directories
 	for _, target := range append([]string{"static_data"}, spanner.AllObjectTypes...) {

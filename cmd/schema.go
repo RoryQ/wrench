@@ -11,11 +11,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/spf13/pflag"
-
-	"github.com/ory/dockertest/v3"
-	"github.com/ory/dockertest/v3/docker"
+	"github.com/moby/moby/api/types/container"
+	"github.com/ory/dockertest/v4"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/roryq/wrench/internal/graceful"
 )
@@ -50,23 +49,28 @@ func findCommand(name string) *cobra.Command {
 func schema(c *cobra.Command, args []string) error {
 	defer gracefulSchemaTasks.Exit()
 
+	ctx := c.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	projectId := setIfUnset(c.Flag(flagNameProject), "project")
 	instanceId := setIfUnset(c.Flag(flagNameInstance), "instance")
 	databaseId := setIfUnset(c.Flag(flagNameDatabase), "database")
 
 	f := c.Flag(flagSpannerEmulatorImage)
-	_, err := runSpannerEmulator(f.Value.String(), projectId, instanceId, databaseId)
+	_, err := runSpannerEmulator(ctx, f.Value.String(), projectId, instanceId, databaseId)
 	if err != nil {
 		return err
 	}
 
 	// create database
 	{
-		client, err := newSpannerClient(context.Background(), c)
+		client, err := newSpannerClient(ctx, c)
 		if err != nil {
 			return err
 		}
-		if err := client.CreateDatabase(context.Background(), nil, nil); err != nil {
+		if err := client.CreateDatabase(ctx, nil, nil); err != nil {
 			if status.Code(err) != codes.AlreadyExists {
 				_ = client.Close()
 				return err
@@ -100,51 +104,59 @@ func setIfUnset(f *pflag.Flag, val string) string {
 	return f.Value.String()
 }
 
-func connectDockerPool() (*dockertest.Pool, error) {
-	pool, err := dockertest.NewPool("")
+func connectDockerPool(ctx context.Context) (dockertest.ClosablePool, error) {
+	pool, err := dockertest.NewPool(ctx, "")
 	if err != nil {
 		return nil, err
 	}
 
-	return pool, pool.Client.Ping()
+	return pool, nil
 }
 
-func runSpannerEmulator(image string, projectId, instanceId, databaseId string) (*spannerEmulator, error) {
-	pool, err := connectDockerPool()
+func runSpannerEmulator(ctx context.Context, image string, projectId, instanceId, databaseId string) (*spannerEmulator, error) {
+	pool, err := connectDockerPool(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	repo, tag, _ := strings.Cut(image, ":")
-	container, err := pool.RunWithOptions(&dockertest.RunOptions{
-		Repository: repo,
-		Tag:        tag,
-		Env: []string{
+	opts := []dockertest.RunOption{
+		dockertest.WithoutReuse(),
+		dockertest.WithEnv([]string{
 			"SPANNER_PROJECT_ID=" + projectId,
 			"SPANNER_INSTANCE_ID=" + instanceId,
 			"SPANNER_DATABASE_ID=" + databaseId,
-		},
-	},
-		func(config *docker.HostConfig) {
+		}),
+		dockertest.WithHostConfig(func(config *container.HostConfig) {
 			config.AutoRemove = true
-			config.RestartPolicy = docker.NeverRestart()
-		},
-	)
+			config.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyDisabled}
+		}),
+	}
+	if tag != "" {
+		opts = append(opts, dockertest.WithTag(tag))
+	}
+
+	container, err := pool.Run(ctx, repo, opts...)
 	if err != nil {
 		return nil, err
 	}
 
 	gracefulSchemaTasks.Do(func() {
-		if err = container.Close(); err != nil {
+		if err = container.Close(context.Background()); err != nil {
 			println("error during spanner container shutdown", err.Error())
+		}
+		if err = pool.Close(context.Background()); err != nil {
+			println("error during docker pool shutdown", err.Error())
 		}
 	})
 
-	pool.MaxWait = time.Minute
-	err = pool.Retry(func() error {
+	err = pool.Retry(ctx, time.Minute, func() error {
 		hcheck := fmt.Sprintf("http://localhost:%s/v1/projects/test-project/instanceConfigs", container.GetPort("9020/tcp"))
-		_, err := http.Get(hcheck)
-		return err
+		resp, err := http.Get(hcheck)
+		if err != nil {
+			return err
+		}
+		return resp.Body.Close()
 	})
 	if err != nil {
 		return nil, err
@@ -159,8 +171,8 @@ func runSpannerEmulator(image string, projectId, instanceId, databaseId string) 
 }
 
 type spannerEmulator struct {
-	container *dockertest.Resource
-	pool      *dockertest.Pool
+	container dockertest.ClosableResource
+	pool      dockertest.ClosablePool
 }
 
 func (s *spannerEmulator) SpannerEmulatorHost() string {

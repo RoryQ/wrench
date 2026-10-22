@@ -9,7 +9,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.26.2
 	github.com/kennygrant/sanitize v1.2.4
 	github.com/moby/moby/api v1.56.1
-	github.com/ory/dockertest/v4 v4.0.0
+	github.com/ory/dockertest/v4 v4.0.1
 	github.com/sourcegraph/conc v0.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10

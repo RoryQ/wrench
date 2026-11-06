@@ -12,7 +12,7 @@ require (
 	github.com/ory/dockertest/v4 v4.0.1
 	github.com/sourcegraph/conc v0.3.0
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/api v0.310.0
 	google.golang.org/grpc v1.85.0

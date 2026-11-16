@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/googleapis/gax-go/v2 v2.27.0
 	github.com/kennygrant/sanitize v1.2.4
-	github.com/moby/moby/api v1.56.1
+	github.com/moby/moby/api v1.57.0
 	github.com/ory/dockertest/v4 v4.0.1
 	github.com/sourcegraph/conc v0.3.0
 	github.com/spf13/cobra v1.10.2

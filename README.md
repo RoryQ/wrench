@@ -19,6 +19,7 @@ using `migrate repair`.
   The name can contain alphanumeric characters, underscores and dashes.
   They are executed after all versioned migrations have been applied.
   **Note:** Repeatable migrations must be idempotent (e.g. `CREATE OR REPLACE VIEW`) as they may be re-executed multiple times and are not atomic with the history update.
+- BigQuery Migrations. Supports running versioned and repeatable migrations against Google BigQuery datasets via `--driver bigquery` (or auto-detected when `--dataset` / `$BIGQUERY_DATASET_ID` is set), including distributed locking, out-of-order migrations, dirty repair, multi-statement SQL scripts, and `${PROJECT_ID}` / `${DATASET_ID}` / `${LOCATION}` placeholder replacement.
 
 
 ## Onboarding existing databases to wrench
@@ -55,6 +56,8 @@ go install github.com/roryq/wrench@latest
 
 ### Prerequisite
 
+#### Cloud Spanner
+
 ```sh
 export SPANNER_PROJECT_ID=your-project-id
 export SPANNER_INSTANCE_ID=your-instance-id
@@ -62,6 +65,24 @@ export SPANNER_DATABASE_ID=your-database-id
 ```
 
 You can also specify project id, instance id and database id by passing them as command arguments.
+
+#### BigQuery
+
+```sh
+export BIGQUERY_PROJECT_ID=your-project-id
+export BIGQUERY_DATASET_ID=your-dataset-id
+export BIGQUERY_LOCATION=US # optional (e.g. US, EU, australia-southeast1)
+```
+
+Or pass flags directly:
+
+```sh
+wrench migrate up --driver bigquery --project your-project-id --dataset your-dataset-id --location US --directory _examples/bigquery
+```
+
+Supported `wrench migrate` subcommands for BigQuery: `create`, `up`, `version`, `history`, `repair`, and `setup-lock`.
+BigQuery migrations execute as full SQL scripts (supporting mixed DDL/DML and procedural blocks) and support `${PROJECT_ID}`, `${DATASET_ID}`, and `${LOCATION}` placeholders.
+For local testing against [goccy/bigquery-emulator](https://github.com/goccy/bigquery-emulator), set `BIGQUERY_EMULATOR_HOST=http://localhost:9050`.
 
 <!--usage-shell-->
 ```
@@ -97,14 +118,17 @@ Available Commands:
 Flags:
       --credentials-file string              Specify Credentials File
       --database string                      Cloud Spanner database name (optional. if not set, will use $SPANNER_DATABASE_ID value)
+      --dataset string                       BigQuery dataset name (optional. if not set, will use $BIGQUERY_DATASET_ID or $BIGQUERY_DATASET value)
       --detect-partitioned-dml               Automatically detect when a migration contains only Partitioned DML statements, and apply the statements in partition-level transactions via the PartitionedDML API. (optional. if not set, will use $WRENCH_DETECT_PARTITIONED_DML or default to false)
       --directory string                     Directory that schema file placed (required)
+      --driver string                        Database driver to use: spanner or bigquery (optional. if not set, uses $WRENCH_DRIVER or auto-detects from --dataset / --instance)
   -h, --help                                 help for wrench
       --instance string                      Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)
+      --location string                      BigQuery dataset/job location (optional. if not set, will use $BIGQUERY_LOCATION value)
       --lock-identifier string               Random identifier used to lock migration operations to a single wrench process. (optional. if not set then it will be generated) (default "58a4394a-19f9-4dbf-880d-20b6cf169d46")
       --output-dir string                    Output directory for schema files. Falls back to --directory if not set.
       --partitioned-dml-concurrency uint16   Set the concurrency for Partitioned-DML statements. (optional. if not set, will use $WRENCH_PARTITIONED_DML_CONCURRENCY or default to 1) (default 1)
-      --project string                       GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)
+      --project string                       GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID, $BIGQUERY_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)
       --schema-file string                   Name of schema file (optional. if not set, will use default 'schema.sql' file name)
       --sequence-interval uint16             Used to generate the next migration id. Rounds up to the next interval. (optional. if not set, will use $WRENCH_SEQUENCE_INTERVAL or default to 1) (default 1)
       --static-data-tables-file string       File containing list of static data tables to track (optional)
@@ -113,4 +137,60 @@ Flags:
   -v, --version                              version for wrench
 
 Use "wrench [command] --help" for more information about a command.
+```
+
+## Spanner vs BigQuery Support
+
+### CLI Commands
+
+| Command | Cloud Spanner | BigQuery | Notes |
+| :--- | :---: | :---: | :--- |
+| `wrench migrate create` | Yes | Yes | Database-agnostic migration file generation. |
+| `wrench migrate up [N]` | Yes | Yes | Applies versioned and repeatable migrations. |
+| `wrench migrate version` | Yes | Yes | Prints the latest applied migration version. |
+| `wrench migrate history` | Yes | Yes | Prints versioned and repeatable migration history. |
+| `wrench migrate repair` | Yes | Yes | Removes dirty history entries and resets `SchemaMigrations`. |
+| `wrench migrate setup-lock` | Yes | Yes | Initializes or resets `SchemaMigrationsLock`. |
+| `wrench create` / `drop` / `reset` | Yes | No | Spanner-only (errors if `--driver bigquery` is set). |
+| `wrench load` / `load-discrete` | Yes | No | Spanner schema export only. |
+| `wrench schema` | Yes | No | Spanner emulator workflow only. |
+| `wrench apply` / `truncate` | Yes | No | Spanner-only. |
+
+### Migration Capabilities
+
+| Capability | Cloud Spanner | BigQuery |
+| :--- | :---: | :---: |
+| **Versioned & out-of-order migrations** | Yes | Yes |
+| **Repeatable migrations (`R__*.sql`)** | Yes | Yes |
+| **Distributed migration locking** | Yes (Read-Write TX) | Yes (Conditional DML `UPDATE` + 30m lease) |
+| **Dirty version detection & `repair`** | Yes | Yes |
+| **Skip versions (`--skip-versions`)** | Yes | Yes |
+| **Custom sequence intervals** | Yes | Yes |
+| **Placeholders** | `${PROJECT_ID}`, `${INSTANCE_ID}`, `${DATABASE_ID}` | `${PROJECT_ID}`, `${DATASET_ID}`, `${LOCATION}` |
+| **Mixed DDL + DML in a single file** | No | Yes (executed as a BigQuery SQL script) |
+| **Procedural SQL (`BEGIN...END`, `DECLARE`, procedures)** | No | Yes (raw script mode, no semicolon splitting) |
+| **Partitioned DML / Convergent DML** | Yes | N/A (BigQuery DML is natively distributed) |
+| **Fast-forward DDL batching (`--ff-migrations`)** | Yes | No |
+| **Proto descriptors (`--proto-descriptor-file`)** | Yes | No |
+| **Legacy `golang-migrate` table upgrade** | Yes | N/A |
+| **Local emulator** | `SPANNER_EMULATOR_HOST` (`make test`) | `BIGQUERY_EMULATOR_HOST` (`make test-bigquery`) |
+
+### Programmatic Go API
+
+Existing `pkg/core` functions (`core.MigrateUp`, `core.MigrateHistory`, `core.MigrateRepair`, `core.MigrateSetupLock`) accept `*spanner.Client` unchanged. For BigQuery (or any `core.Driver`), use the `*Driver` entrypoints:
+
+```go
+bqClient, err := bigquery.NewClient(ctx, &bigquery.Config{
+	Project:  projectID,
+	Dataset:  datasetID,
+	Location: "US",
+})
+if err != nil {
+	return err
+}
+defer bqClient.Close()
+
+err = core.MigrateUpDriver(ctx, bqClient, "migrations",
+	core.WithBigQueryPlaceholders(true, projectID, datasetID, "US"),
+)
 ```

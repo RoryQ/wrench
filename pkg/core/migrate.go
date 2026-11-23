@@ -75,7 +75,7 @@ func roundNext(n, next uint) uint {
 
 // MigrateUp runs all migrations that haven't been run yet based on the contents of the history table.
 func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string, opts ...MigrateOpt) error {
-	return MigrateUpDriver(ctx, newSpannerDriverAdapter(client), migrationsDir, opts...)
+	return MigrateUpDriver(ctx, NewSpannerDriver(client), migrationsDir, opts...)
 }
 
 // MigrateUpDriver runs all unapplied migrations against any Driver implementation.
@@ -157,7 +157,7 @@ func MigrateUpDriver(ctx context.Context, driver Driver, migrationsDir string, o
 // MigrateHistory prints the migration history.
 // The relevant options are LockTableName, LockIdentifier and VersionTableName.
 func MigrateHistory(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
-	return MigrateHistoryDriver(ctx, newSpannerDriverAdapter(client), opts...)
+	return MigrateHistoryDriver(ctx, NewSpannerDriver(client), opts...)
 }
 
 // MigrateHistoryDriver prints the migration history for any Driver implementation.
@@ -221,7 +221,7 @@ func MigrateHistoryDriver(ctx context.Context, driver Driver, opts ...MigrateOpt
 // schema manually run this step to remove the latest migration from the history table.
 // The relevant options are LockTableName, LockIdentifier and VersionTableName.
 func MigrateRepair(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
-	return MigrateRepairDriver(ctx, newSpannerDriverAdapter(client), opts...)
+	return MigrateRepairDriver(ctx, NewSpannerDriver(client), opts...)
 }
 
 // MigrateRepairDriver repairs the migration history table for any Driver implementation.
@@ -257,7 +257,7 @@ func MigrateRepairDriver(ctx context.Context, driver Driver, opts ...MigrateOpt)
 // MigrateSetupLock sets up the migration lock table.
 // The relevant options are LockTableName.
 func MigrateSetupLock(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
-	return MigrateSetupLockDriver(ctx, newSpannerDriverAdapter(client), opts...)
+	return MigrateSetupLockDriver(ctx, NewSpannerDriver(client), opts...)
 }
 
 // MigrateSetupLockDriver sets up the migration lock table for any Driver implementation.

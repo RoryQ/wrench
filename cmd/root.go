@@ -20,6 +20,7 @@
 package cmd
 
 import (
+	"cmp"
 	"os"
 	"strconv"
 	"strings"
@@ -38,9 +39,12 @@ var (
 )
 
 var (
+	driver                    string
 	project                   string
 	instance                  string
 	database                  string
+	dataset                   string
+	location                  string
 	directory                 string
 	outputDir                 string
 	schemaFile                string
@@ -81,9 +85,12 @@ func init() {
 	rootCmd.AddCommand(truncateCmd)
 
 	// global flags
-	rootCmd.PersistentFlags().StringVar(&project, flagNameProject, spannerProjectID(), "GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)")
+	rootCmd.PersistentFlags().StringVar(&driver, flagNameDriver, getDriver(), "Database driver to use: spanner or bigquery (optional. if not set, uses $WRENCH_DRIVER or auto-detects from --dataset / --instance)")
+	rootCmd.PersistentFlags().StringVar(&project, flagNameProject, defaultProjectID(), "GCP project id (optional. if not set, will use $SPANNER_PROJECT_ID, $BIGQUERY_PROJECT_ID or $GOOGLE_CLOUD_PROJECT value)")
 	rootCmd.PersistentFlags().StringVar(&instance, flagNameInstance, spannerInstanceID(), "Cloud Spanner instance name (optional. if not set, will use $SPANNER_INSTANCE_ID value)")
 	rootCmd.PersistentFlags().StringVar(&database, flagNameDatabase, spannerDatabaseID(), "Cloud Spanner database name (optional. if not set, will use $SPANNER_DATABASE_ID value)")
+	rootCmd.PersistentFlags().StringVar(&dataset, flagNameDataset, bigQueryDatasetID(), "BigQuery dataset name (optional. if not set, will use $BIGQUERY_DATASET_ID or $BIGQUERY_DATASET value)")
+	rootCmd.PersistentFlags().StringVar(&location, flagNameLocation, bigQueryLocation(), "BigQuery dataset/job location (optional. if not set, will use $BIGQUERY_LOCATION value)")
 	rootCmd.PersistentFlags().StringVar(&directory, flagNameDirectory, "", "Directory that schema file placed (required)")
 	rootCmd.PersistentFlags().StringVar(&outputDir, flagNameOutputDir, "", "Output directory for schema files. Falls back to --directory if not set.")
 	rootCmd.PersistentFlags().StringVar(&schemaFile, flagNameSchemaFile, "", "Name of schema file (optional. if not set, will use default 'schema.sql' file name)")
@@ -115,12 +122,16 @@ func underscoreToDashes(f *pflag.FlagSet, name string) pflag.NormalizedName {
 	return pflag.NormalizedName(strings.ReplaceAll(name, "_", "-"))
 }
 
-func spannerProjectID() string {
-	projectID := os.Getenv("SPANNER_PROJECT_ID")
-	if projectID != "" {
-		return projectID
-	}
-	return os.Getenv("GOOGLE_CLOUD_PROJECT")
+func getDriver() string {
+	return os.Getenv("WRENCH_DRIVER")
+}
+
+func defaultProjectID() string {
+	return cmp.Or(
+		os.Getenv("SPANNER_PROJECT_ID"),
+		os.Getenv("BIGQUERY_PROJECT_ID"),
+		os.Getenv("GOOGLE_CLOUD_PROJECT"),
+	)
 }
 
 func spannerInstanceID() string {
@@ -129,6 +140,14 @@ func spannerInstanceID() string {
 
 func spannerDatabaseID() string {
 	return os.Getenv("SPANNER_DATABASE_ID")
+}
+
+func bigQueryDatasetID() string {
+	return cmp.Or(os.Getenv("BIGQUERY_DATASET_ID"), os.Getenv("BIGQUERY_DATASET"))
+}
+
+func bigQueryLocation() string {
+	return os.Getenv("BIGQUERY_LOCATION")
 }
 
 func getSequenceInterval() uint16 {

@@ -16,7 +16,8 @@ type spannerDriverAdapter struct {
 
 var _ migration.Driver = (*spannerDriverAdapter)(nil)
 
-func newSpannerDriverAdapter(client *spanner.Client) *spannerDriverAdapter {
+// NewSpannerDriver wraps a *spanner.Client as a migration.Driver.
+func NewSpannerDriver(client *spanner.Client) Driver {
 	return &spannerDriverAdapter{client: client}
 }
 

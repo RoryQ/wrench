@@ -35,7 +35,7 @@ import (
 	"github.com/roryq/wrench/internal/fs"
 
 	"github.com/roryq/wrench/pkg/core"
-	"github.com/roryq/wrench/pkg/spanner"
+	"github.com/roryq/wrench/pkg/migration"
 )
 
 const (
@@ -102,7 +102,7 @@ func init() {
 
 	migrateCreateCmd.Flags().Bool(flagNameCreateNoPrompt, false, "Don't prompt for a migration file description")
 	migrateUpCmd.Flags().UintSlice(flagSkipVersions, []uint{}, "Versions to skip during migration")
-	migrateUpCmd.Flags().Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement for ${PROJECT_ID}, ${INSTANCE_ID} and ${DATABASE_ID}")
+	migrateUpCmd.Flags().Bool(flagPlaceholderReplacement, true, "Enable placeholder replacement (Spanner: ${PROJECT_ID}, ${INSTANCE_ID}, ${DATABASE_ID}; BigQuery: ${PROJECT_ID}, ${DATASET_ID}, ${LOCATION})")
 	migrateUpCmd.Flags().String(flagProtoDescriptorFile, "", "Proto descriptor file to be used with migrations")
 	migrateUpCmd.Flags().Bool(flagFFMigrations, false, "Fast-forward migrations by batching contiguous DDL migrations into a request. Intended for dev environments.")
 }
@@ -170,11 +170,11 @@ func migrateUp(c *cobra.Command, args []string) error {
 		}
 	}
 
-	client, err := newSpannerClient(ctx, c)
+	drv, driverName, err := newMigrationDriver(ctx, c)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = drv.Close() }()
 
 	placeholdersEnabled, err := c.Flags().GetBool(flagPlaceholderReplacement)
 	if err != nil {
@@ -184,46 +184,74 @@ func migrateUp(c *cobra.Command, args []string) error {
 		}
 	}
 
-	var protoDescriptor []byte
-	protoDescriptorFile := protoDescriptorFilePath(c)
-	if protoDescriptorFile != "" {
-		protoDescriptor, err = fs.ReadFile(ctx, protoDescriptorFile)
-		if err != nil {
-			return &Error{
-				err: err,
-				cmd: c,
-			}
-		}
-	}
-
-	ffMigrations, err := c.Flags().GetBool(flagFFMigrations)
-	if err != nil {
-		return &Error{
-			cmd: c,
-			err: err,
-		}
-	}
-
-	migrationsDir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
-	err = core.MigrateUp(ctx, client, migrationsDir,
+	opts := []core.MigrateOpt{
 		core.WithLimit(limit),
 		core.WithSkipVersions(toSkip),
 		core.WithLockIdentifier(lockIdentifier),
 		core.WithVersionTable(migrationTableName),
 		core.WithLockTable(migrationLockTable),
-		core.WithPartitionedDMLConcurrency(partitionedDMLConcurrency),
-		core.WithDetectPartitionedDML(detectPartitionedDML),
 		core.WithPrintRowsAffected(verbose),
-		core.WithDefaultPlaceholders(
-			placeholdersEnabled,
-			c.Flag(flagNameProject).Value.String(),
-			c.Flag(flagNameInstance).Value.String(),
-			c.Flag(flagNameDatabase).Value.String(),
-		),
-		core.WithProtoDescriptors(protoDescriptor),
-		core.WithFFMigrations(ffMigrations),
-	)
+	}
 
+	switch driverName {
+	case driverBigQuery:
+		if c.Flags().Changed(flagFFMigrations) {
+			return &Error{
+				cmd: c,
+				err: fmt.Errorf("--%s is not supported for the bigquery driver", flagFFMigrations),
+			}
+		}
+		if c.Flags().Changed(flagProtoDescriptorFile) {
+			return &Error{
+				cmd: c,
+				err: fmt.Errorf("--%s is not supported for the bigquery driver", flagProtoDescriptorFile),
+			}
+		}
+		opts = append(opts,
+			core.WithBigQueryPlaceholders(
+				placeholdersEnabled,
+				resolvedBigQueryProject(c),
+				c.Flag(flagNameDataset).Value.String(),
+				c.Flag(flagNameLocation).Value.String(),
+			),
+		)
+	default:
+		var protoDescriptor []byte
+		protoDescriptorFile := protoDescriptorFilePath(c)
+		if protoDescriptorFile != "" {
+			protoDescriptor, err = fs.ReadFile(ctx, protoDescriptorFile)
+			if err != nil {
+				return &Error{
+					err: err,
+					cmd: c,
+				}
+			}
+		}
+
+		ffMigrations, err := c.Flags().GetBool(flagFFMigrations)
+		if err != nil {
+			return &Error{
+				cmd: c,
+				err: err,
+			}
+		}
+
+		opts = append(opts,
+			core.WithPartitionedDMLConcurrency(partitionedDMLConcurrency),
+			core.WithDetectPartitionedDML(detectPartitionedDML),
+			core.WithDefaultPlaceholders(
+				placeholdersEnabled,
+				c.Flag(flagNameProject).Value.String(),
+				c.Flag(flagNameInstance).Value.String(),
+				c.Flag(flagNameDatabase).Value.String(),
+			),
+			core.WithProtoDescriptors(protoDescriptor),
+			core.WithFFMigrations(ffMigrations),
+		)
+	}
+
+	migrationsDir := filepath.Join(c.Flag(flagNameDirectory).Value.String(), migrationsDirName)
+	err = core.MigrateUpDriver(ctx, drv, migrationsDir, opts...)
 	if err != nil {
 		return &Error{
 			cmd: c,
@@ -236,23 +264,22 @@ func migrateUp(c *cobra.Command, args []string) error {
 func migrateVersion(c *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	client, err := newSpannerClient(ctx, c)
+	drv, _, err := newMigrationDriver(ctx, c)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = drv.Close() }()
 
-	if err = client.EnsureMigrationTable(ctx, migrationTableName); err != nil {
+	if err = drv.EnsureMigrationTable(ctx, migrationTableName); err != nil {
 		return &Error{
 			cmd: c,
 			err: err,
 		}
 	}
 
-	v, _, err := client.GetSchemaMigrationVersion(ctx, migrationTableName)
+	v, _, err := drv.GetSchemaMigrationVersion(ctx, migrationTableName)
 	if err != nil {
-		var se *spanner.Error
-		if errors.As(err, &se) && se.Code == spanner.ErrorCodeNoMigration {
+		if errors.Is(err, migration.ErrNoMigration) {
 			fmt.Println("No migrations.")
 			return nil
 		}
@@ -270,13 +297,13 @@ func migrateVersion(c *cobra.Command, args []string) error {
 func migrateHistory(c *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	client, err := newSpannerClient(ctx, c)
+	drv, _, err := newMigrationDriver(ctx, c)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = drv.Close() }()
 
-	err = core.MigrateHistory(ctx, client, core.WithLockTable(migrationLockTable), core.WithLockIdentifier(lockIdentifier))
+	err = core.MigrateHistoryDriver(ctx, drv, core.WithLockTable(migrationLockTable), core.WithLockIdentifier(lockIdentifier))
 	if err != nil {
 		return &Error{
 			cmd: c,
@@ -290,13 +317,13 @@ func migrateHistory(c *cobra.Command, args []string) error {
 func migrateRepair(c *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	client, err := newSpannerClient(ctx, c)
+	drv, _, err := newMigrationDriver(ctx, c)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = drv.Close() }()
 
-	err = core.MigrateRepair(ctx, client,
+	err = core.MigrateRepairDriver(ctx, drv,
 		core.WithLockTable(migrationLockTable),
 		core.WithLockIdentifier(lockIdentifier),
 		core.WithVersionTable(migrationTableName),
@@ -313,13 +340,13 @@ func migrateRepair(c *cobra.Command, args []string) error {
 func migrateLocker(c *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	client, err := newSpannerClient(ctx, c)
+	drv, _, err := newMigrationDriver(ctx, c)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = drv.Close() }()
 
-	if err := core.MigrateSetupLock(ctx, client, core.WithLockTable(migrationLockTable)); err != nil {
+	if err := core.MigrateSetupLockDriver(ctx, drv, core.WithLockTable(migrationLockTable)); err != nil {
 		return &Error{
 			cmd: c,
 			err: err,

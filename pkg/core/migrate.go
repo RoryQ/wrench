@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -109,20 +108,15 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		return err
 	}
 
-	migrationsOutput := make(spanner.MigrationsOutput)
 	switch status {
 	case spanner.ExistingMigrationsUpgradeStarted:
-		output, err := client.UpgradeExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.ProtoDescriptors, options.FFMigrations)
-		if err != nil {
+		if _, err := client.UpgradeExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.ProtoDescriptors, options.FFMigrations); err != nil {
 			return err
 		}
-		maps.Copy(migrationsOutput, output)
 	case spanner.ExistingMigrationsUpgradeCompleted:
-		output, err := client.ExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors, options.FFMigrations)
-		if err != nil {
+		if _, err := client.ExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors, options.FFMigrations); err != nil {
 			return err
 		}
-		maps.Copy(migrationsOutput, output)
 	default:
 		return errors.New("migration in undetermined state")
 	}
@@ -132,15 +126,9 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		if err := client.EnsureRepeatableMigrationTable(ctx, repeatableTableName); err != nil {
 			return err
 		}
-		repeatableOutput, err := client.ExecuteRepeatableMigrations(ctx, repeatableMigrations, repeatableTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors)
-		if err != nil {
+		if _, err := client.ExecuteRepeatableMigrations(ctx, repeatableMigrations, repeatableTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors); err != nil {
 			return err
 		}
-		maps.Copy(migrationsOutput, repeatableOutput)
-	}
-
-	if options.PrintRowsAffected {
-		fmt.Print(migrationsOutput.String())
 	}
 
 	return nil

@@ -20,10 +20,12 @@
 package spanner
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -121,6 +123,24 @@ type (
 		ReplacementEnabled bool
 	}
 )
+
+func (m *Migration) logApplied(ctx context.Context, rowsAffected *int64) {
+	msg := "migration applied"
+	var attrs []any
+	if m.IsRepeatable {
+		msg = "repeatable migration applied"
+		attrs = []any{"name", m.Name, "file", m.FileName}
+	} else {
+		attrs = []any{"version", m.Version, "file", m.FileName}
+		if m.Name != "" {
+			attrs = append(attrs, "name", m.Name)
+		}
+	}
+	if rowsAffected != nil {
+		attrs = append(attrs, "rows_affected", *rowsAffected)
+	}
+	slog.InfoContext(ctx, msg, attrs...)
+}
 
 func (ms Migrations) Len() int {
 	return len(ms)

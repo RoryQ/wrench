@@ -13,6 +13,7 @@ const (
 	ErrorCodeMigrationVersionDirty
 	ErrorCodeRepairMigration
 	ErrorCodeMigrationLock
+	ErrorCodeLoadSchema
 )
 
 type Error struct {

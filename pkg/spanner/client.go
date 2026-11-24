@@ -285,11 +285,7 @@ func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, e
 	return objects, nil
 }
 
-type SchemaDDL struct {
-	Statement  string
-	Filename   string
-	ObjectType string
-}
+type SchemaDDL = mig.SchemaDDL
 
 // extractQualifiedName returns the object name at tokens[j], joining with tokens[j+1]
 // when the statement contains a schema-qualified name (e.g. my_schema.FunctionName).

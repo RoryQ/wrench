@@ -152,7 +152,7 @@ Use "wrench [command] --help" for more information about a command.
 | `wrench migrate repair` | Yes | Yes | Removes dirty history entries and resets `SchemaMigrations`. |
 | `wrench migrate setup-lock` | Yes | Yes | Initializes or resets `SchemaMigrationsLock`. |
 | `wrench create` / `drop` / `reset` | Yes | No | Spanner-only (errors if `--driver bigquery` is set). |
-| `wrench load` / `load-discrete` | Yes | No | Spanner schema export only. |
+| `wrench load` / `load-discrete` | Yes | Yes | Exports dataset objects (`table`, `view`, `materialized_view`, `function`, `table_function`, `procedure`, `search_index`) via BigQuery `INFORMATION_SCHEMA`. Static data export is Spanner-only. |
 | `wrench schema` | Yes | No | Spanner emulator workflow only. |
 | `wrench apply` / `truncate` | Yes | No | Spanner-only. |
 

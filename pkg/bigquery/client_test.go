@@ -33,9 +33,10 @@ type fakeExecutor struct {
 	lockID            string
 	lockExpiry        time.Time
 	lockFound         bool
-	history           []migration.MigrationHistoryRecord
-	repeatableHistory []migration.RepeatableMigrationHistoryRecord
-	closed            bool
+	history              []migration.MigrationHistoryRecord
+	repeatableHistory    []migration.RepeatableMigrationHistoryRecord
+	querySchemaObjectsFn func(sql string) ([]schemaObjectRow, error)
+	closed               bool
 }
 
 func (f *fakeExecutor) tableExists(_ context.Context, tableName string) (bool, error) {
@@ -64,6 +65,14 @@ func (f *fakeExecutor) queryHistory(_ context.Context, _ string, _ ...bq.QueryPa
 
 func (f *fakeExecutor) queryRepeatableHistory(_ context.Context, _ string, _ ...bq.QueryParameter) ([]migration.RepeatableMigrationHistoryRecord, error) {
 	return f.repeatableHistory, nil
+}
+
+func (f *fakeExecutor) querySchemaObjects(_ context.Context, sql string) ([]schemaObjectRow, error) {
+	f.queries = append(f.queries, recordedQuery{sql: sql})
+	if f.querySchemaObjectsFn != nil {
+		return f.querySchemaObjectsFn(sql)
+	}
+	return nil, nil
 }
 
 func (f *fakeExecutor) close() error {

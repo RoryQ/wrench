@@ -32,6 +32,7 @@ type queryExecutor interface {
 	queryLock(ctx context.Context, sql string, params ...bq.QueryParameter) (lockID string, expiry time.Time, found bool, err error)
 	queryHistory(ctx context.Context, sql string, params ...bq.QueryParameter) ([]migration.MigrationHistoryRecord, error)
 	queryRepeatableHistory(ctx context.Context, sql string, params ...bq.QueryParameter) ([]migration.RepeatableMigrationHistoryRecord, error)
+	querySchemaObjects(ctx context.Context, sql string) ([]schemaObjectRow, error)
 	close() error
 }
 
@@ -207,6 +208,28 @@ func (e *bqExecutor) queryRepeatableHistory(ctx context.Context, sql string, par
 		history = append(history, rec)
 	}
 	return history, nil
+}
+
+func (e *bqExecutor) querySchemaObjects(ctx context.Context, sql string) ([]schemaObjectRow, error) {
+	it, cancel, err := e.queryRows(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
+
+	var rows []schemaObjectRow
+	for {
+		var row schemaObjectRow
+		err := it.Next(&row)
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 // Client is a BigQuery migration driver implementing migration.Driver and migration.ScriptModeDriver.

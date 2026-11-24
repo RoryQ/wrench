@@ -40,6 +40,13 @@ type MigrationLock struct {
 	Expiry         time.Time `spanner:"Expiry" bigquery:"Expiry"`
 }
 
+// SchemaDDL represents a single database object DDL statement for discrete schema export.
+type SchemaDDL struct {
+	Statement  string
+	Filename   string
+	ObjectType string
+}
+
 // ExecuteOptions holds execution parameters passed from the core runner to a Driver.
 type ExecuteOptions struct {
 	Limit                     int

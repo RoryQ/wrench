@@ -109,7 +109,8 @@ func WithPartitionedDMLConcurrency[T int | uint16](concurrency T) MigrateOpt {
 	}
 }
 
-// WithPrintRowsAffected sets whether to print the number of rows affected by each migration.
+// WithPrintRowsAffected is retained for backward compatibility.
+// Deprecated: rows_affected is now logged automatically via slog for DML migrations.
 func WithPrintRowsAffected(val bool) MigrateOpt {
 	return func(opt *migrateOptions) error {
 		opt.PrintRowsAffected = val

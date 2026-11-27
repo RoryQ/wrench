@@ -22,13 +22,16 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/roryq/wrench/cmd"
+	"github.com/roryq/wrench/internal/logging"
 	"github.com/roryq/wrench/pkg/spanner"
 )
 
 func main() {
+	slog.SetDefault(logging.DefaultLogger())
 	execute()
 }
 

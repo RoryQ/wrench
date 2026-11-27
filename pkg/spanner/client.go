@@ -24,8 +24,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
-	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -499,7 +499,7 @@ func (c *Client) LoadDDLs(ctx context.Context) ([]SchemaDDL, error) {
 	objects, err := c.fetchDatabaseObjects(ctx)
 	if err != nil {
 		// Log error but continue with nil objects for best-effort parsing
-		fmt.Fprintf(os.Stderr, "warning: failed to fetch database metadata: %v\n", err)
+		slog.WarnContext(ctx, "failed to fetch database metadata", "error", err)
 	}
 
 	ddls := make([]SchemaDDL, 0)
@@ -1014,10 +1014,10 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 			}
 		}
 
-		if m.Name != "" {
-			fmt.Printf("%d/up %s\n", m.Version, m.Name)
+		if info, ok := migrationsOutput[m.FileName]; ok {
+			m.logApplied(ctx, &info.RowsAffected)
 		} else {
-			fmt.Printf("%d/up\n", m.Version)
+			m.logApplied(ctx, nil)
 		}
 
 		if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
@@ -1034,7 +1034,7 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 	}
 
 	if count == 0 {
-		fmt.Println("no change")
+		slog.InfoContext(ctx, "no change")
 	}
 
 	return migrationsOutput, nil
@@ -1126,8 +1126,12 @@ func (c *Client) ExecuteRepeatableMigrations(ctx context.Context, migrations Mig
 			}
 		}
 
-		fmt.Printf("R/up %s\n", m.Name)
 		migrationsOutput[m.FileName] = migrationInfo{RowsAffected: rowsAffected}
+		if statementKind != StatementKindDDL {
+			m.logApplied(ctx, &rowsAffected)
+		} else {
+			m.logApplied(ctx, nil)
+		}
 	}
 
 	return migrationsOutput, nil
@@ -1191,7 +1195,7 @@ func (c *Client) executeFFMigrations(ctx context.Context, migrations Migrations,
 	batches := groupMigrationsByType(migrations, applied, limit)
 
 	if len(batches) > 0 {
-		fmt.Printf("Fast-forward migrations enabled: grouped into %d batch(es)\n", len(batches))
+		slog.InfoContext(ctx, "fast-forward migrations enabled", "batches", len(batches))
 	}
 
 	for _, batch := range batches {
@@ -1201,14 +1205,7 @@ func (c *Client) executeFFMigrations(ctx context.Context, migrations Migrations,
 
 		// Log batch information
 		if len(batch.migrations) > 1 {
-			fmt.Printf("Batching %d %s migrations:\n", len(batch.migrations), batch.kind)
-			for _, m := range batch.migrations {
-				if m.Name != "" {
-					fmt.Printf("  - %d: %s\n", m.Version, m.Name)
-				} else {
-					fmt.Printf("  - %d\n", m.Version)
-				}
-			}
+			slog.InfoContext(ctx, "batching migrations", "count", len(batch.migrations), "kind", batch.kind, "versions", batch.versions())
 		}
 
 		// Mark all migrations in batch as dirty before execution
@@ -1225,7 +1222,7 @@ func (c *Client) executeFFMigrations(ctx context.Context, migrations Migrations,
 		switch batch.kind {
 		case StatementKindDDL:
 			if len(batch.migrations) > 1 {
-				fmt.Printf("Applying versions %v in a single UpdateDatabaseDdlRequest\n", batch.versions())
+				slog.InfoContext(ctx, "applying DDL batch", "versions", batch.versions())
 			}
 
 			if err := c.ApplyDDL(ctx, batch.statements(), protoDescriptors); err != nil {
@@ -1286,11 +1283,11 @@ func (c *Client) executeFFMigrations(ctx context.Context, migrations Migrations,
 
 		// Mark all migrations in batch as clean and print status
 		for _, m := range batch.migrations {
-			if m.Name != "" {
-				fmt.Printf("%d/up %s\n", m.Version, m.Name)
-			} else {
-				fmt.Printf("%d/up\n", m.Version)
-			}
+			if info, ok := migrationsOutput[m.FileName]; ok {
+			m.logApplied(ctx, &info.RowsAffected)
+		} else {
+			m.logApplied(ctx, nil)
+		}
 
 			if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
 				return nil, &Error{
@@ -1307,7 +1304,7 @@ func (c *Client) executeFFMigrations(ctx context.Context, migrations Migrations,
 	}
 
 	if count == 0 {
-		fmt.Println("no change")
+		slog.InfoContext(ctx, "no change")
 	}
 
 	return migrationsOutput, nil
@@ -1668,7 +1665,7 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 		if err != nil {
 			return err
 		}
-		fmt.Printf("clearing lock identifier [%s] expiry [%v]\n", lock.LockIdentifier, lock.Expiry)
+		slog.InfoContext(ctx, "clearing migration lock", "lock_identifier", lock.LockIdentifier, "expiry", lock.Expiry)
 
 		// update
 		return trx.BufferWrite([]*spanner.Mutation{
@@ -1727,7 +1724,7 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 	lock.Release = func() {
 		err = c.releaseMigrationLock(ctx, tableName, lockIdentifier)
 		if err != nil {
-			fmt.Printf("failed to release migration lock: %v\n", err)
+			slog.WarnContext(ctx, "failed to release migration lock", "error", err)
 		}
 	}
 

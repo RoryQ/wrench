@@ -663,7 +663,11 @@ func TestEnsureMigrationTable(t *testing.T) {
 			t.Fatalf("failed to ensure migration table: %v", err)
 		}
 
-		if client.tableExists(ctx, migrationTable+historyStr) == false {
+		exists, err := client.tableExists(ctx, migrationTable+historyStr)
+		if err != nil {
+			t.Fatalf("failed to check history table existence: %v", err)
+		}
+		if !exists {
 			t.Fatal("failed to create history table")
 		}
 	})
@@ -878,7 +882,11 @@ func TestUpgrade(t *testing.T) {
 		if err := client.EnsureMigrationTable(ctx, migrationTable); err != nil {
 			t.Fatalf("failed to recreate migration table: %v", err)
 		}
-		if client.tableExists(ctx, upgradeIndicator) == false {
+		exists, err := client.tableExists(ctx, upgradeIndicator)
+		if err != nil {
+			t.Fatalf("failed to check upgrade indicator existence: %v", err)
+		}
+		if !exists {
 			t.Error("upgrade indicator should exist")
 		}
 		if _, err := client.UpgradeExecuteMigrations(ctx, migrations, len(migrations), migrationTable, nil, false); err != nil {
@@ -893,7 +901,11 @@ func TestUpgrade(t *testing.T) {
 		if len(expected) != len(actual) {
 			t.Error("missing versions in backfilled history")
 		}
-		if client.tableExists(ctx, upgradeIndicator) == true {
+		exists, err = client.tableExists(ctx, upgradeIndicator)
+		if err != nil {
+			t.Fatalf("failed to check upgrade indicator existence: %v", err)
+		}
+		if exists {
 			t.Error("upgrade indicator should be dropped")
 		}
 

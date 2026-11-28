@@ -10,8 +10,12 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/roryq/wrench/pkg/migration"
 	"github.com/roryq/wrench/pkg/spanner"
 )
+
+// Driver is the database-agnostic migration driver interface.
+type Driver = migration.Driver
 
 // CreateMigrationFile creates a new migration file in the given directory. The name should be alphanumeric with underscores
 // or dashes only.
@@ -24,16 +28,18 @@ func CreateMigrationFile(dir string, name string, opts ...MigrationSequenceOpt) 
 		}
 	}
 
-	if name != "" && !spanner.MigrationNameRegex.MatchString(name) {
+	if name != "" && !migration.MigrationNameRegex.MatchString(name) {
 		return "", errors.New("Invalid migration file name.")
 	}
 
-	ms, err := spanner.LoadMigrations(dir, nil, false, spanner.PlaceholderOptions{ReplacementEnabled: false})
+	ms, err := migration.LoadMigrationsWithOptions(dir, migration.LoadOptions{
+		RawScript: true,
+	})
 	if err != nil {
 		return "", err
 	}
 
-	var versionedMigrations spanner.Migrations
+	var versionedMigrations migration.Migrations
 	for _, m := range ms {
 		if !m.IsRepeatable {
 			versionedMigrations = append(versionedMigrations, m)
@@ -69,6 +75,11 @@ func roundNext(n, next uint) uint {
 
 // MigrateUp runs all migrations that haven't been run yet based on the contents of the history table.
 func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string, opts ...MigrateOpt) error {
+	return MigrateUpDriver(ctx, NewSpannerDriver(client), migrationsDir, opts...)
+}
+
+// MigrateUpDriver runs all unapplied migrations against any Driver implementation.
+func MigrateUpDriver(ctx context.Context, driver Driver, migrationsDir string, opts ...MigrateOpt) error {
 	options := defaultMigrateOptions()
 	for _, optFn := range opts {
 		if err := optFn(options); err != nil {
@@ -76,8 +87,10 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		}
 	}
 
-	lock, err := client.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
-	defer lock.Release()
+	lock, err := driver.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
+	if lock.Release != nil {
+		defer lock.Release()
+	}
 	if err != nil {
 		return err
 	}
@@ -85,12 +98,25 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		return fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry)
 	}
 
-	migrations, err := spanner.LoadMigrations(migrationsDir, options.SkipVersions, options.DetectPartitionedDML, spanner.PlaceholderOptions{Placeholders: options.Placeholders, ReplacementEnabled: options.PlaceholdersEnabled})
+	rawScript := false
+	if sd, ok := driver.(migration.ScriptModeDriver); ok {
+		rawScript = sd.UseRawScript()
+	}
+
+	migrations, err := migration.LoadMigrationsWithOptions(migrationsDir, migration.LoadOptions{
+		SkipVersions:         options.SkipVersions,
+		DetectPartitionedDML: options.DetectPartitionedDML,
+		Placeholders: migration.PlaceholderOptions{
+			Placeholders:       options.Placeholders,
+			ReplacementEnabled: options.PlaceholdersEnabled,
+		},
+		RawScript: rawScript,
+	})
 	if err != nil {
 		return err
 	}
 
-	var versionedMigrations, repeatableMigrations spanner.Migrations
+	var versionedMigrations, repeatableMigrations migration.Migrations
 	for _, m := range migrations {
 		if m.IsRepeatable {
 			repeatableMigrations = append(repeatableMigrations, m)
@@ -99,34 +125,28 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 		}
 	}
 
-	if err = client.EnsureMigrationTable(ctx, options.VersionTableName); err != nil {
+	if err = driver.EnsureMigrationTable(ctx, options.VersionTableName); err != nil {
 		return err
 	}
 
-	status, err := client.DetermineUpgradeStatus(ctx, options.VersionTableName)
-	if err != nil {
-		return err
+	execOpts := migration.ExecuteOptions{
+		Limit:                     options.Limit,
+		VersionTableName:          options.VersionTableName,
+		PartitionedDMLConcurrency: options.PartitionedDMLConcurrency,
+		ProtoDescriptors:          options.ProtoDescriptors,
+		FFMigrations:              options.FFMigrations,
 	}
 
-	switch status {
-	case spanner.ExistingMigrationsUpgradeStarted:
-		if _, err := client.UpgradeExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.ProtoDescriptors, options.FFMigrations); err != nil {
-			return err
-		}
-	case spanner.ExistingMigrationsUpgradeCompleted:
-		if _, err := client.ExecuteMigrations(ctx, versionedMigrations, options.Limit, options.VersionTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors, options.FFMigrations); err != nil {
-			return err
-		}
-	default:
-		return errors.New("migration in undetermined state")
+	if err := driver.ExecuteMigrations(ctx, versionedMigrations, execOpts); err != nil {
+		return err
 	}
 
 	if len(repeatableMigrations) > 0 {
-		repeatableTableName := spanner.RepeatableHistoryTableName(options.VersionTableName)
-		if err := client.EnsureRepeatableMigrationTable(ctx, repeatableTableName); err != nil {
+		repeatableTableName := migration.RepeatableHistoryTableName(options.VersionTableName)
+		if err := driver.EnsureRepeatableMigrationTable(ctx, repeatableTableName); err != nil {
 			return err
 		}
-		if _, err := client.ExecuteRepeatableMigrations(ctx, repeatableMigrations, repeatableTableName, options.PartitionedDMLConcurrency, options.ProtoDescriptors); err != nil {
+		if err := driver.ExecuteRepeatableMigrations(ctx, repeatableMigrations, repeatableTableName, execOpts); err != nil {
 			return err
 		}
 	}
@@ -137,14 +157,21 @@ func MigrateUp(ctx context.Context, client *spanner.Client, migrationsDir string
 // MigrateHistory prints the migration history.
 // The relevant options are LockTableName, LockIdentifier and VersionTableName.
 func MigrateHistory(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
+	return MigrateHistoryDriver(ctx, NewSpannerDriver(client), opts...)
+}
+
+// MigrateHistoryDriver prints the migration history for any Driver implementation.
+func MigrateHistoryDriver(ctx context.Context, driver Driver, opts ...MigrateOpt) error {
 	options := defaultMigrateOptions()
 	for _, optFn := range opts {
 		if err := optFn(options); err != nil {
 			return err
 		}
 	}
-	lock, err := client.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
-	defer lock.Release()
+	lock, err := driver.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
+	if lock.Release != nil {
+		defer lock.Release()
+	}
 	if err != nil {
 		return err
 	}
@@ -152,7 +179,7 @@ func MigrateHistory(ctx context.Context, client *spanner.Client, opts ...Migrate
 		return fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry)
 	}
 
-	history, err := client.GetMigrationHistory(ctx, options.VersionTableName)
+	history, err := driver.GetMigrationHistory(ctx, options.VersionTableName)
 	if err != nil {
 		return err
 	}
@@ -168,7 +195,7 @@ func MigrateHistory(ctx context.Context, client *spanner.Client, opts ...Migrate
 	}
 	_ = writer.Flush()
 
-	repeatableHistory, err := client.GetRepeatableMigrationHistory(ctx, spanner.RepeatableHistoryTableName(options.VersionTableName))
+	repeatableHistory, err := driver.GetRepeatableMigrationHistory(ctx, migration.RepeatableHistoryTableName(options.VersionTableName))
 	if err != nil {
 		return err
 	}
@@ -194,14 +221,21 @@ func MigrateHistory(ctx context.Context, client *spanner.Client, opts ...Migrate
 // schema manually run this step to remove the latest migration from the history table.
 // The relevant options are LockTableName, LockIdentifier and VersionTableName.
 func MigrateRepair(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
+	return MigrateRepairDriver(ctx, NewSpannerDriver(client), opts...)
+}
+
+// MigrateRepairDriver repairs the migration history table for any Driver implementation.
+func MigrateRepairDriver(ctx context.Context, driver Driver, opts ...MigrateOpt) error {
 	options := defaultMigrateOptions()
 	for _, optFn := range opts {
 		if err := optFn(options); err != nil {
 			return err
 		}
 	}
-	lock, err := client.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
-	defer lock.Release()
+	lock, err := driver.GetMigrationLock(ctx, options.LockTableName, options.LockIdentifier)
+	if lock.Release != nil {
+		defer lock.Release()
+	}
 	if err != nil {
 		return err
 	}
@@ -209,11 +243,11 @@ func MigrateRepair(ctx context.Context, client *spanner.Client, opts ...MigrateO
 		return fmt.Errorf("lock taken by another process %s which expires %v", lock.LockIdentifier, lock.Expiry)
 	}
 
-	if err = client.EnsureMigrationTable(ctx, options.VersionTableName); err != nil {
+	if err = driver.EnsureMigrationTable(ctx, options.VersionTableName); err != nil {
 		return err
 	}
 
-	if err := client.RepairMigration(ctx, options.VersionTableName); err != nil {
+	if err := driver.RepairMigration(ctx, options.VersionTableName); err != nil {
 		return err
 	}
 
@@ -223,11 +257,16 @@ func MigrateRepair(ctx context.Context, client *spanner.Client, opts ...MigrateO
 // MigrateSetupLock sets up the migration lock table.
 // The relevant options are LockTableName.
 func MigrateSetupLock(ctx context.Context, client *spanner.Client, opts ...MigrateOpt) error {
+	return MigrateSetupLockDriver(ctx, NewSpannerDriver(client), opts...)
+}
+
+// MigrateSetupLockDriver sets up the migration lock table for any Driver implementation.
+func MigrateSetupLockDriver(ctx context.Context, driver Driver, opts ...MigrateOpt) error {
 	options := defaultMigrateOptions()
 	for _, optFn := range opts {
 		if err := optFn(options); err != nil {
 			return err
 		}
 	}
-	return client.SetupMigrationLock(ctx, options.LockTableName)
+	return driver.SetupMigrationLock(ctx, options.LockTableName)
 }

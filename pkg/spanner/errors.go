@@ -57,6 +57,10 @@ func (e *Error) Error() string {
 	return e.err.Error()
 }
 
+func (e *Error) Unwrap() error {
+	return e.err
+}
+
 func (e *Error) GRPCStatus() *status.Status {
 	if st, ok := status.FromError(e.err); ok {
 		return st

@@ -30,12 +30,12 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
-	"time"
 	"unicode"
 
 	"github.com/googleapis/gax-go/v2"
 	"github.com/sourcegraph/conc/pool"
 
+	mig "github.com/roryq/wrench/pkg/migration"
 	"github.com/roryq/wrench/pkg/spannerz"
 
 	"google.golang.org/grpc/codes"
@@ -54,7 +54,6 @@ const (
 	ddlStatementsSeparator             = ";"
 	upgradeIndicator                   = "wrench_upgrade_indicator"
 	historyStr                         = "History"
-	repeatableHistoryStr               = "RepeatableHistory"
 	lockStr                            = "Lock"
 	FirstRun                           = UpgradeStatus("FirstRun")
 	ExistingMigrationsNoUpgrade        = UpgradeStatus("NoUpgrade")
@@ -109,21 +108,13 @@ type Client struct {
 	spannerAdminClient *admin.DatabaseAdminClient
 }
 
-type MigrationHistoryRecord struct {
-	Version  int64     `spanner:"Version"`
-	Dirty    bool      `spanner:"Dirty"`
-	Created  time.Time `spanner:"Created"`
-	Modified time.Time `spanner:"Modified"`
-}
-
-type RepeatableMigrationHistoryRecord struct {
-	Name      string    `spanner:"Name"`
-	Checksum  string    `spanner:"Checksum"`
-	AppliedAt time.Time `spanner:"AppliedAt"`
-}
+type (
+	MigrationHistoryRecord           = mig.MigrationHistoryRecord
+	RepeatableMigrationHistoryRecord = mig.RepeatableMigrationHistoryRecord
+)
 
 func RepeatableHistoryTableName(versionTableName string) string {
-	return versionTableName + repeatableHistoryStr
+	return mig.RepeatableHistoryTableName(versionTableName)
 }
 
 func NewClient(ctx context.Context, config *Config) (*Client, error) {
@@ -294,11 +285,7 @@ func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, e
 	return objects, nil
 }
 
-type SchemaDDL struct {
-	Statement  string
-	Filename   string
-	ObjectType string
-}
+type SchemaDDL = mig.SchemaDDL
 
 // extractQualifiedName returns the object name at tokens[j], joining with tokens[j+1]
 // when the statement contains a schema-qualified name (e.g. my_schema.FunctionName).
@@ -1015,9 +1002,9 @@ func (c *Client) ExecuteMigrations(ctx context.Context, migrations Migrations, l
 		}
 
 		if info, ok := migrationsOutput[m.FileName]; ok {
-			m.logApplied(ctx, &info.RowsAffected)
+			m.LogApplied(ctx, &info.RowsAffected)
 		} else {
-			m.logApplied(ctx, nil)
+			m.LogApplied(ctx, nil)
 		}
 
 		if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
@@ -1128,9 +1115,9 @@ func (c *Client) ExecuteRepeatableMigrations(ctx context.Context, migrations Mig
 
 		migrationsOutput[m.FileName] = migrationInfo{RowsAffected: rowsAffected}
 		if statementKind != StatementKindDDL {
-			m.logApplied(ctx, &rowsAffected)
+			m.LogApplied(ctx, &rowsAffected)
 		} else {
-			m.logApplied(ctx, nil)
+			m.LogApplied(ctx, nil)
 		}
 	}
 
@@ -1284,9 +1271,9 @@ func (c *Client) executeFFMigrations(ctx context.Context, migrations Migrations,
 		// Mark all migrations in batch as clean and print status
 		for _, m := range batch.migrations {
 			if info, ok := migrationsOutput[m.FileName]; ok {
-			m.logApplied(ctx, &info.RowsAffected)
+			m.LogApplied(ctx, &info.RowsAffected)
 		} else {
-			m.logApplied(ctx, nil)
+			m.LogApplied(ctx, nil)
 		}
 
 			if err := c.setSchemaMigrationVersion(ctx, m.Version, false, tableName); err != nil {
@@ -1370,7 +1357,7 @@ func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string
 		if err == iterator.Done {
 			return 0, false, &Error{
 				Code: ErrorCodeNoMigration,
-				err:  errors.New("No migration."),
+				err:  mig.ErrNoMigration,
 			}
 		}
 		return 0, false, &Error{
@@ -1630,12 +1617,7 @@ func (c *Client) createVersionTable(ctx context.Context, tableName string) error
 	return c.ApplyDDL(ctx, []string{stmt}, nil)
 }
 
-type MigrationLock struct {
-	Success        bool
-	Release        func()
-	LockIdentifier string    `spanner:"LockIdentifier"`
-	Expiry         time.Time `spanner:"Expiry"`
-}
+type MigrationLock = mig.MigrationLock
 
 func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error {
 	if !c.tableExists(ctx, tableName) {

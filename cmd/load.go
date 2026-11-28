@@ -23,12 +23,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
+	"github.com/roryq/wrench/pkg/bigquery"
+	"github.com/roryq/wrench/pkg/migration"
 	"github.com/roryq/wrench/pkg/spanner"
 
 	"github.com/spf13/cobra"
@@ -60,17 +63,40 @@ var loadDiscreteCmd = &cobra.Command{
 func load(c *cobra.Command, args []string) error {
 	ctx := context.Background()
 
-	client, err := newSpannerClient(ctx, c)
+	driverName, err := resolveDriver(c)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 
-	ddl, err := client.LoadDDL(ctx)
-	if err != nil {
-		return &Error{
-			err: err,
-			cmd: c,
+	var ddl []byte
+	switch driverName {
+	case driverBigQuery:
+		client, err := newBigQueryClient(ctx, c)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = client.Close() }()
+
+		ddl, err = client.LoadDDL(ctx)
+		if err != nil {
+			return &Error{
+				err: err,
+				cmd: c,
+			}
+		}
+	default:
+		client, err := newSpannerClient(ctx, c)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+
+		ddl, err = client.LoadDDL(ctx)
+		if err != nil {
+			return &Error{
+				err: err,
+				cmd: c,
+			}
 		}
 	}
 
@@ -88,6 +114,15 @@ func load(c *cobra.Command, args []string) error {
 func loadDiscrete(c *cobra.Command, args []string) error {
 	ctx := context.Background()
 
+	driverName, err := resolveDriver(c)
+	if err != nil {
+		return err
+	}
+
+	if driverName == driverBigQuery {
+		return loadDiscreteBigQuery(ctx, c)
+	}
+
 	client, err := newSpannerClient(ctx, c)
 	if err != nil {
 		return err
@@ -103,7 +138,7 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := clearSchemaDir(c); err != nil {
+	if err := clearSchemaDir(c, spanner.AllObjectTypes); err != nil {
 		return &Error{
 			err: err,
 			cmd: c,
@@ -139,6 +174,53 @@ func loadDiscrete(c *cobra.Command, args []string) error {
 				err: err,
 				cmd: c,
 			}
+		}
+	}
+
+	return nil
+}
+
+func loadDiscreteBigQuery(ctx context.Context, c *cobra.Command) error {
+	client, err := newBigQueryClient(ctx, c)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = client.Close() }()
+
+	ddls, err := client.LoadDDLs(ctx)
+	if err != nil {
+		return &Error{
+			err: err,
+			cmd: c,
+		}
+	}
+
+	if err := clearSchemaDir(c, bigquery.AllObjectTypes); err != nil {
+		return &Error{
+			err: err,
+			cmd: c,
+		}
+	}
+	for _, ddl := range ddls {
+		if err := writeDDL(ddl, schemaDirPath(c)); err != nil {
+			return &Error{
+				err: err,
+				cmd: c,
+			}
+		}
+	}
+
+	config, err := readStaticDataTablesFile(staticDataTablesFilePath(c))
+	if err != nil {
+		return &Error{
+			err: err,
+			cmd: c,
+		}
+	}
+	if len(config.StaticDataTables) > 0 {
+		return &Error{
+			err: fmt.Errorf("static data export is not supported for the bigquery driver"),
+			cmd: c,
 		}
 	}
 
@@ -205,7 +287,7 @@ func readTxtFile(filePath string) ([]string, error) {
 	return tables, nil
 }
 
-func writeDDL(ddl spanner.SchemaDDL, schemaDir string) error {
+func writeDDL(ddl migration.SchemaDDL, schemaDir string) error {
 	parent := filepath.Join(schemaDir, ddl.ObjectType)
 	file := filepath.Join(parent, ddl.Filename)
 	if err := mkdir(parent); err != nil {
@@ -240,8 +322,8 @@ func schemaDirPath(c *cobra.Command) string {
 	return outputDirPath(c)
 }
 
-func clearSchemaDir(c *cobra.Command) error {
-	knownObjectTypes := append([]string{dirStaticData}, spanner.AllObjectTypes...)
+func clearSchemaDir(c *cobra.Command, objectTypes []string) error {
+	knownObjectTypes := append([]string{dirStaticData}, objectTypes...)
 
 	for _, target := range knownObjectTypes {
 		path := filepath.Join(schemaDirPath(c), target)

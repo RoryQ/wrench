@@ -137,6 +137,32 @@ func DefaultPlaceholders(projectID, instanceID, databaseID string) map[string]st
 	}
 }
 
+// WithCustomPlaceholders sets whether placeholders are enabled and supplies a custom placeholder key-to-value map.
+func WithCustomPlaceholders(enabled bool, placeholders map[string]string) MigrateOpt {
+	return func(opt *migrateOptions) error {
+		opt.PlaceholdersEnabled = enabled
+		if enabled {
+			opt.Placeholders = placeholders
+		}
+		return nil
+	}
+}
+
+// WithBigQueryPlaceholders sets whether placeholders are enabled and populates the default BigQuery placeholders
+// (${PROJECT_ID}, ${DATASET_ID}, ${LOCATION}).
+func WithBigQueryPlaceholders(enabled bool, projectID, datasetID, location string) MigrateOpt {
+	return WithCustomPlaceholders(enabled, BigQueryPlaceholders(projectID, datasetID, location))
+}
+
+// BigQueryPlaceholders returns the default placeholder map for BigQuery migrations.
+func BigQueryPlaceholders(projectID, datasetID, location string) map[string]string {
+	return map[string]string{
+		"PROJECT_ID": projectID,
+		"DATASET_ID": datasetID,
+		"LOCATION":   location,
+	}
+}
+
 // WithProtoDescriptors sets proto descriptors to use for the migration
 func WithProtoDescriptors(protoDescriptors []byte) MigrateOpt {
 	return func(opt *migrateOptions) error {

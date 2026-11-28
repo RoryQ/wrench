@@ -239,9 +239,11 @@ func (c *Client) TruncateAllTables(ctx context.Context) error {
 		}
 	}
 
-	_, err = c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		return txn.BufferWrite(m)
-	})
+	if len(m) == 0 {
+		return nil
+	}
+
+	_, err = c.spannerClient.Apply(ctx, m)
 	if err != nil {
 		return &Error{
 			Code: ErrorCodeTruncateAllTables,
@@ -272,9 +274,11 @@ func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, e
 		"SELECT ROLE_NAME as Name, 'database_role' as Type FROM INFORMATION_SCHEMA.DATABASE_ROLES WHERE ROLE_NAME NOT IN ('public')",
 	}
 
-	for _, q := range append(queries, optionalQueries...) {
-		iter := c.spannerClient.Single().Query(ctx, spanner.Statement{SQL: q})
-		err := iter.Do(func(row *spanner.Row) error {
+	ro := c.spannerClient.ReadOnlyTransaction()
+	defer ro.Close()
+
+	runQuery := func(q string) error {
+		return ro.Query(ctx, spanner.Statement{SQL: q}).Do(func(row *spanner.Row) error {
 			var name, typ string
 			if err := row.Columns(&name, &typ); err != nil {
 				return err
@@ -282,12 +286,21 @@ func (c *Client) fetchDatabaseObjects(ctx context.Context) (map[string]string, e
 			objects[strings.ToLower(name)] = typ
 			return nil
 		})
-		if err != nil {
-			// If it's a "Table not found" error, we just skip it for optional queries
+	}
+
+	for _, q := range queries {
+		if err := runQuery(q); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, q := range optionalQueries {
+		if err := runQuery(q); err != nil {
+			// Skip views that may not exist in older emulator versions or dialects.
 			if spanner.ErrCode(err) == codes.NotFound || strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "Table not found") {
 				continue
 			}
-			// For primary queries, we might want to know if it fails, but for now let's be lenient
+			slog.WarnContext(ctx, "failed to query optional INFORMATION_SCHEMA view", "error", err)
 		}
 	}
 
@@ -693,17 +706,33 @@ func (c *Client) ApplyDMLFile(ctx context.Context, dml []byte, partitioned bool,
 }
 
 func (c *Client) ApplyDML(ctx context.Context, statements []string) (int64, error) {
-	numAffectedRows := int64(0)
+	if len(statements) == 0 {
+		return 0, nil
+	}
+
+	var numAffectedRows int64
 	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
-		for _, s := range statements {
-			num, err := tx.Update(ctx, spanner.Statement{
-				SQL: s,
-			})
+		var total int64
+		if len(statements) == 1 {
+			num, err := tx.Update(ctx, spanner.Statement{SQL: statements[0]})
 			if err != nil {
 				return err
 			}
-			numAffectedRows += num
+			total = num
+		} else {
+			stmts := make([]spanner.Statement, len(statements))
+			for i, s := range statements {
+				stmts[i] = spanner.Statement{SQL: s}
+			}
+			counts, err := tx.BatchUpdate(ctx, stmts)
+			if err != nil {
+				return err
+			}
+			for _, n := range counts {
+				total += n
+			}
 		}
+		numAffectedRows = total
 		return nil
 	})
 	if err != nil {
@@ -771,21 +800,56 @@ func (c *Client) backfillMigrations(ctx context.Context, migrations Migrations, 
 		return err
 	}
 
+	type targetVersion struct {
+		version int64
+		dirty   bool
+	}
+	var targets []targetVersion
+	keys := make([]spanner.Key, 0, len(migrations))
+	for i := range migrations {
+		if v > migrations[i].Version {
+			ver := int64(migrations[i].Version)
+			targets = append(targets, targetVersion{version: ver, dirty: false})
+			keys = append(keys, spanner.Key{ver})
+		} else if v == migrations[i].Version {
+			ver := int64(migrations[i].Version)
+			targets = append(targets, targetVersion{version: ver, dirty: d})
+			keys = append(keys, spanner.Key{ver})
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+
 	historyTableName := tableName + historyStr
 	_, err = c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, rw *spanner.ReadWriteTransaction) error {
-		for i := range migrations {
-			if v > migrations[i].Version {
-				if err := c.upsertVersionHistory(ctx, rw, int64(migrations[i].Version), false, historyTableName); err != nil {
-					return err
-				}
-			} else if v == migrations[i].Version {
-				if err := c.upsertVersionHistory(ctx, rw, int64(migrations[i].Version), d, historyTableName); err != nil {
-					return err
-				}
+		existing := make(map[int64]bool, len(targets))
+		err := rw.Read(ctx, historyTableName, spanner.KeySetFromKeys(keys...), []string{"Version"}).Do(func(r *spanner.Row) error {
+			var ver int64
+			if err := r.Column(0, &ver); err != nil {
+				return err
+			}
+			existing[ver] = true
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+
+		muts := make([]*spanner.Mutation, 0, len(targets))
+		for _, t := range targets {
+			if existing[t.version] {
+				muts = append(muts, spanner.Update(historyTableName,
+					[]string{"Version", "Dirty", "Modified"},
+					[]any{t.version, t.dirty, spanner.CommitTimestamp}))
+			} else {
+				muts = append(muts, spanner.Insert(historyTableName,
+					[]string{"Version", "Dirty", "Created", "Modified"},
+					[]any{t.version, t.dirty, spanner.CommitTimestamp, spanner.CommitTimestamp}))
 			}
 		}
 
-		return nil
+		return rw.BufferWrite(muts)
 	})
 	if err != nil {
 		return err
@@ -829,7 +893,14 @@ func (c *Client) markUpgradeComplete(ctx context.Context) error {
 }
 
 func (c *Client) GetMigrationHistory(ctx context.Context, versionTableName string) ([]MigrationHistoryRecord, error) {
-	if !c.tableExists(ctx, versionTableName) {
+	exists, err := c.tableExists(ctx, versionTableName)
+	if err != nil {
+		return nil, &Error{
+			Code: ErrorCodeGetMigrationVersion,
+			err:  err,
+		}
+	}
+	if !exists {
 		return nil, &Error{
 			Code: ErrorCodeGetMigrationVersion,
 			err:  errors.New("Migration history table not found. Run a migration to enable history"),
@@ -837,8 +908,8 @@ func (c *Client) GetMigrationHistory(ctx context.Context, versionTableName strin
 	}
 
 	history := make([]MigrationHistoryRecord, 0)
-	stmt := spanner.NewStatement("SELECT Version, Dirty, Created, Modified FROM " + versionTableName + historyStr)
-	err := c.spannerClient.Single().Query(ctx, stmt).Do(func(r *spanner.Row) error {
+	stmt := spanner.NewStatement("SELECT Version, Dirty, Created, Modified FROM " + versionTableName + historyStr + " ORDER BY Version ASC")
+	err = c.spannerClient.Single().Query(ctx, stmt).Do(func(r *spanner.Row) error {
 		version := MigrationHistoryRecord{}
 		if err := r.ToStruct(&version); err != nil {
 			return err
@@ -855,13 +926,17 @@ func (c *Client) GetMigrationHistory(ctx context.Context, versionTableName strin
 }
 
 func (c *Client) GetRepeatableMigrationHistory(ctx context.Context, tableName string) ([]RepeatableMigrationHistoryRecord, error) {
-	if !c.tableExists(ctx, tableName) {
+	exists, err := c.tableExists(ctx, tableName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
 		return nil, nil
 	}
 
 	history := make([]RepeatableMigrationHistoryRecord, 0)
-	stmt := spanner.NewStatement("SELECT Name, Checksum, AppliedAt FROM " + tableName)
-	err := c.spannerClient.Single().Query(ctx, stmt).Do(func(r *spanner.Row) error {
+	stmt := spanner.NewStatement("SELECT Name, Checksum, AppliedAt FROM " + tableName + " ORDER BY Name ASC")
+	err = c.spannerClient.Single().Query(ctx, stmt).Do(func(r *spanner.Row) error {
 		record := RepeatableMigrationHistoryRecord{}
 		if err := r.ToStruct(&record); err != nil {
 			return err
@@ -1367,7 +1442,7 @@ func (c *Client) GetSchemaMigrationVersion(ctx context.Context, tableName string
 
 	row, err := iter.Next()
 	if err != nil {
-		if err == iterator.Done {
+		if errors.Is(err, iterator.Done) {
 			return 0, false, &Error{
 				Code: ErrorCodeNoMigration,
 				err:  errors.New("No migration."),
@@ -1454,7 +1529,7 @@ func (c *Client) RepairMigration(ctx context.Context, tableName string) error {
 }
 
 func resetSchemaVersion(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string, tableName string) ([]*spanner.Mutation, error) {
-	latestSQL := "select * from " + tableNameHistory + " where dirty = FALSE order by version desc limit 1"
+	latestSQL := "SELECT Version, Dirty, Created, Modified FROM " + tableNameHistory + " WHERE Dirty = FALSE ORDER BY Version DESC LIMIT 1"
 	latest, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, latestSQL)
 	if err != nil {
 		return nil, err
@@ -1467,13 +1542,13 @@ func resetSchemaVersion(ctx context.Context, tx *spanner.ReadWriteTransaction, t
 }
 
 func deleteDirtyHistory(ctx context.Context, tx *spanner.ReadWriteTransaction, tableNameHistory string) ([]*spanner.Mutation, error) {
-	sql := "select * from " + tableNameHistory + " where dirty = TRUE"
+	sql := "SELECT Version FROM " + tableNameHistory + " WHERE Dirty = TRUE"
 	dirty, err := spannerz.GetSQL[MigrationHistoryRecord](ctx, tx, sql)
 	if err != nil {
 		return nil, err
 	}
 
-	keys := []spanner.Key{}
+	keys := make([]spanner.Key, 0, len(dirty))
 	for _, record := range dirty {
 		keys = append(keys, spanner.Key{record.Version})
 	}
@@ -1533,7 +1608,11 @@ func (c *Client) EnsureMigrationTable(ctx context.Context, tableName string) err
 }
 
 func (c *Client) EnsureRepeatableMigrationTable(ctx context.Context, tableName string) error {
-	if c.tableExists(ctx, tableName) {
+	exists, err := c.tableExists(ctx, tableName)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return nil
 	}
 
@@ -1582,18 +1661,28 @@ AND table_name in (@version, @history, @indicator)`)
 	}
 }
 
-func (c *Client) tableExists(ctx context.Context, tableName string) bool {
+func (c *Client) tableExists(ctx context.Context, tableName string) (bool, error) {
 	ri := c.spannerClient.Single().Query(ctx, spanner.Statement{
-		SQL:    "SELECT table_name FROM information_schema.tables WHERE table_catalog = '' AND table_name = @table",
-		Params: map[string]interface{}{"table": tableName},
+		SQL:    "SELECT table_name FROM information_schema.tables WHERE table_catalog = '' AND table_schema = '' AND table_name = @table",
+		Params: map[string]any{"table": tableName},
 	})
 	defer ri.Stop()
 	_, err := ri.Next()
-	return err != iterator.Done
+	if errors.Is(err, iterator.Done) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *Client) createHistoryTable(ctx context.Context, historyTableName string) error {
-	if c.tableExists(ctx, historyTableName) {
+	exists, err := c.tableExists(ctx, historyTableName)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return nil
 	}
 
@@ -1608,7 +1697,11 @@ func (c *Client) createHistoryTable(ctx context.Context, historyTableName string
 }
 
 func (c *Client) createUpgradeIndicatorTable(ctx context.Context) error {
-	if c.tableExists(ctx, upgradeIndicator) {
+	exists, err := c.tableExists(ctx, upgradeIndicator)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return nil
 	}
 
@@ -1618,7 +1711,11 @@ func (c *Client) createUpgradeIndicatorTable(ctx context.Context) error {
 }
 
 func (c *Client) createVersionTable(ctx context.Context, tableName string) error {
-	if c.tableExists(ctx, tableName) {
+	exists, err := c.tableExists(ctx, tableName)
+	if err != nil {
+		return err
+	}
+	if exists {
 		return nil
 	}
 
@@ -1637,8 +1734,17 @@ type MigrationLock struct {
 	Expiry         time.Time `spanner:"Expiry"`
 }
 
+type migrationLockRow struct {
+	LockIdentifier spanner.NullString `spanner:"LockIdentifier"`
+	Expiry         spanner.NullTime   `spanner:"Expiry"`
+}
+
 func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error {
-	if !c.tableExists(ctx, tableName) {
+	exists, err := c.tableExists(ctx, tableName)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		sql := fmt.Sprintf("CREATE TABLE %s(ID INT64, LockIdentifier STRING(200), Expiry TIMESTAMP) PRIMARY KEY(ID)", tableName)
 		err := c.ApplyDDL(ctx, []string{sql}, nil)
 		if err != nil {
@@ -1646,7 +1752,12 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 		}
 	}
 
-	_, err := c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+	var clearedLock migrationLockRow
+	var clearedExisting bool
+	_, err = c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		clearedLock = migrationLockRow{}
+		clearedExisting = false
+
 		row, err := trx.ReadRow(ctx, tableName, spanner.Key{spanner.NullInt64{}}, []string{"LockIdentifier", "Expiry"})
 		if err != nil {
 			// insert
@@ -1654,28 +1765,35 @@ func (c *Client) SetupMigrationLock(ctx context.Context, tableName string) error
 				return trx.BufferWrite([]*spanner.Mutation{
 					spanner.Insert(tableName,
 						[]string{"ID"},
-						[]interface{}{spanner.NullInt64{}}),
+						[]any{spanner.NullInt64{}}),
 				})
 			}
 			return err
 		}
 
-		lock := MigrationLock{}
-		err = row.ToStruct(&lock)
-		if err != nil {
+		var lockRow migrationLockRow
+		if err := row.ToStruct(&lockRow); err != nil {
 			return err
 		}
-		slog.InfoContext(ctx, "clearing migration lock", "lock_identifier", lock.LockIdentifier, "expiry", lock.Expiry)
+		clearedLock = lockRow
+		clearedExisting = true
 
 		// update
 		return trx.BufferWrite([]*spanner.Mutation{
 			spanner.Update(tableName,
 				[]string{"ID", "LockIdentifier", "Expiry"},
-				[]interface{}{spanner.NullInt64{}, spanner.NullString{}, spanner.NullTime{}}),
+				[]any{spanner.NullInt64{}, spanner.NullString{}, spanner.NullTime{}}),
 		})
 	})
+	if err != nil {
+		return err
+	}
 
-	return err
+	if clearedExisting {
+		slog.InfoContext(ctx, "clearing migration lock", "lock_identifier", clearedLock.LockIdentifier.StringVal, "expiry", clearedLock.Expiry.Time)
+	}
+
+	return nil
 }
 
 func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier string) (lock MigrationLock, err error) {
@@ -1684,11 +1802,19 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 	}
 
 	// skip if lock table not setup
-	if !c.tableExists(ctx, tableName) {
-		lock.Success = true
+	exists, err := c.tableExists(ctx, tableName)
+	if err != nil {
 		return lock, err
 	}
+	if !exists {
+		lock.Success = true
+		return lock, nil
+	}
+
+	var txLock MigrationLock
 	_, err = c.spannerClient.ReadWriteTransaction(ctx, func(ctx context.Context, trx *spanner.ReadWriteTransaction) error {
+		var current MigrationLock
+
 		sql := fmt.Sprintf(`UPDATE %s SET LockIdentifier=@lockIdentifier, 
 		Expiry = TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 30 MINUTE) 
 		WHERE ID IS NULL AND (LockIdentifier IS NULL OR CURRENT_TIMESTAMP() > Expiry)`, tableName)
@@ -1699,13 +1825,20 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 			return err
 		}
 
-		lock.Success = rc == 1
+		current.Success = rc == 1
 
-		sql2 := fmt.Sprintf("Select LockIdentifier, Expiry FROM %s WHERE ID IS NULL", tableName)
+		sql2 := fmt.Sprintf("SELECT LockIdentifier, Expiry FROM %s WHERE ID IS NULL", tableName)
 		err = trx.Query(ctx, spanner.NewStatement(sql2)).
 			Do(func(r *spanner.Row) error {
-				if err := r.ToStruct(&lock); err != nil {
+				var row migrationLockRow
+				if err := r.ToStruct(&row); err != nil {
 					return err
+				}
+				if row.LockIdentifier.Valid {
+					current.LockIdentifier = row.LockIdentifier.StringVal
+				}
+				if row.Expiry.Valid {
+					current.Expiry = row.Expiry.Time
 				}
 				return nil
 			})
@@ -1713,22 +1846,28 @@ func (c *Client) GetMigrationLock(ctx context.Context, tableName, lockIdentifier
 			return err
 		}
 
+		txLock = current
 		return nil
 	})
 	if err != nil {
 		return lock, err
 	}
 
-	// fmt.Printf("%v %s %v\n", lock.Success, lock.LockIdentifier, lock.Expiry)
+	lock.Success = txLock.Success
+	lock.LockIdentifier = txLock.LockIdentifier
+	lock.Expiry = txLock.Expiry
 
-	lock.Release = func() {
-		err = c.releaseMigrationLock(ctx, tableName, lockIdentifier)
-		if err != nil {
-			slog.WarnContext(ctx, "failed to release migration lock", "error", err)
+	if lock.Success {
+		lock.Release = func() {
+			releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer releaseCancel()
+			if err := c.releaseMigrationLock(releaseCtx, tableName, lockIdentifier); err != nil {
+				slog.WarnContext(releaseCtx, "failed to release migration lock", "error", err)
+			}
 		}
 	}
 
-	return lock, err
+	return lock, nil
 }
 
 func (c *Client) releaseMigrationLock(ctx context.Context, tableName, lockIdentifier string) error {
